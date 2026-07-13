@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { supabase } from "./supabaseClient";
 import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, ChevronLeft, ChevronRight } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -81,8 +82,36 @@ function toDateInputValue(date) {
 }
 
 export default function ProductionScheduler() {
-    const [jobs, setJobs] = useState(cloneJobs);
-    const [resources, setResources] = useState(cloneResources);
+   const [jobs, setJobs] = useState(cloneJobs);
+const [resources, setResources] = useState(cloneResources);
+const [loaded, setLoaded] = useState(false);
+
+useEffect(() => {
+    supabase
+        .from("schedule_state")
+        .select("data")
+        .eq("id", 1)
+        .single()
+        .then(({ data, error }) => {
+            if (!error && data?.data && Object.keys(data.data).length > 0) {
+                setJobs(data.data.jobs || cloneJobs());
+                setResources(data.data.resources || cloneResources());
+            }
+            setLoaded(true);
+        });
+}, []);
+
+useEffect(() => {
+    if (!loaded) return;
+    const timer = setTimeout(() => {
+        supabase
+            .from("schedule_state")
+            .update({ data: { jobs, resources }, updated_at: new Date().toISOString() })
+            .eq("id", 1)
+            .then();
+    }, 800);
+    return () => clearTimeout(timer);
+}, [jobs, resources, loaded]);
     const [hourWidth, setHourWidth] = useState(22);
     const [selectedJobId, setSelectedJobId] = useState(null);
     const [selectedResourceId, setSelectedResourceId] = useState(null);
