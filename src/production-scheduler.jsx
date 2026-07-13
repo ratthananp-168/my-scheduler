@@ -570,7 +570,7 @@ export default function ProductionScheduler() {
                         <div className="ps-scroll" style={styles.homeWrap}>
                             <div style={styles.homeGreetingCard}>
                                 <div>
-                                    <div style={styles.homeGreetingTitle}>Good to see you 👋</div>
+                                    <div style={styles.homeGreetingTitle}>Good to see you Ratthanan 👋</div>
                                     <div style={styles.homeGreetingSub}>
                                         Here's what's happening across the floor for the {DAYS}-day window starting {baseDate.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}.
                                     </div>
