@@ -24,10 +24,9 @@ export default function ScanAction({ kind, action, id, onDone }) {
     const [errorMsg, setErrorMsg] = useState("");
     const [alarmReason, setAlarmReason] = useState(ALARM_REASONS[0].id);
     const [blockReason, setBlockReason] = useState(""); // set when a job-start is blocked by an active resource alarm
-    const [errorStage, setErrorStage] = useState(null); // "load" | "confirm" - which step to retry
 
-    async function load() {
-        try {
+    useEffect(() => {
+        async function load() {
             const { data, error } = await supabase
                 .from("schedule_state")
                 .select("data")
@@ -35,7 +34,6 @@ export default function ScanAction({ kind, action, id, onDone }) {
                 .single();
 
             if (error || !data?.data) {
-                setErrorStage("load");
                 setStatus("error");
                 setErrorMsg("โหลดข้อมูลไม่สำเร็จ ลองใหม่อีกครั้ง");
                 return;
@@ -69,16 +67,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
                 setTarget(resource);
                 setStatus("confirm");
             }
-        } catch (err) {
-            // network hiccup (e.g. right after switching from the camera/QR app to the browser) -
-            // supabase-js throws instead of returning {error} for genuine connection failures
-            setErrorStage("load");
-            setStatus("error");
-            setErrorMsg("เชื่อมต่อไม่สำเร็จ (เครือข่ายอาจมีปัญหาชั่วคราว) กดลองอีกครั้ง");
         }
-    }
-
-    useEffect(() => {
         load();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -86,68 +75,48 @@ export default function ScanAction({ kind, action, id, onDone }) {
     async function handleConfirm() {
         setStatus("working");
 
-        try {
-            const { data, error } = await supabase
-                .from("schedule_state")
-                .select("data")
-                .eq("id", 1)
-                .single();
+        const { data, error } = await supabase
+            .from("schedule_state")
+            .select("data")
+            .eq("id", 1)
+            .single();
 
-            if (error || !data?.data) {
-                setErrorStage("confirm");
-                setStatus("error");
-                setErrorMsg("โหลดข้อมูลไม่สำเร็จ ลองใหม่อีกครั้ง");
-                return;
-            }
-
-            let payload = data.data;
-
-            if (kind === "job") {
-                const jobs = (data.data.jobs || []).map((j) =>
-                    j.id === id ? { ...j, isRunning: action === "start", lastScanAt: new Date().toISOString() } : j
-                );
-                payload = { ...data.data, jobs };
-            } else {
-                const resources = (data.data.resources || []).map((r) =>
-                    r.id === id
-                        ? action === "raise"
-                            ? { ...r, alarmActive: true, alarmReason, alarmAt: Date.now() }
-                            : { ...r, alarmActive: false, alarmReason: null, alarmAt: null }
-                        : r
-                );
-                payload = { ...data.data, resources };
-            }
-
-            const { error: updateError } = await supabase
-                .from("schedule_state")
-                .update({ data: payload, updated_at: new Date().toISOString() })
-                .eq("id", 1);
-
-            if (updateError) {
-                setErrorStage("confirm");
-                setStatus("error");
-                setErrorMsg("บันทึกสถานะไม่สำเร็จ ลองใหม่อีกครั้ง");
-                return;
-            }
-
-            setStatus("done");
-        } catch (err) {
-            // network hiccup mid-write - without this catch the screen would hang on
-            // "working" forever with nothing written and no way to retry but a full refresh
-            setErrorStage("confirm");
+        if (error || !data?.data) {
             setStatus("error");
-            setErrorMsg("เชื่อมต่อไม่สำเร็จระหว่างบันทึก (เครือข่ายอาจมีปัญหาชั่วคราว) กดลองอีกครั้ง");
+            setErrorMsg("โหลดข้อมูลไม่สำเร็จ ลองใหม่อีกครั้ง");
+            return;
         }
-    }
 
-    function handleRetry() {
-        setErrorMsg("");
-        if (errorStage === "confirm") {
-            handleConfirm();
+        let payload = data.data;
+
+        if (kind === "job") {
+            const jobs = (data.data.jobs || []).map((j) =>
+                j.id === id ? { ...j, isRunning: action === "start", lastScanAt: new Date().toISOString() } : j
+            );
+            payload = { ...data.data, jobs };
         } else {
-            setStatus("loading");
-            load();
+            const resources = (data.data.resources || []).map((r) =>
+                r.id === id
+                    ? action === "raise"
+                        ? { ...r, alarmActive: true, alarmReason, alarmAt: Date.now() }
+                        : { ...r, alarmActive: false, alarmReason: null, alarmAt: null }
+                    : r
+            );
+            payload = { ...data.data, resources };
         }
+
+        const { error: updateError } = await supabase
+            .from("schedule_state")
+            .update({ data: payload, updated_at: new Date().toISOString() })
+            .eq("id", 1);
+
+        if (updateError) {
+            setStatus("error");
+            setErrorMsg("บันทึกสถานะไม่สำเร็จ ลองใหม่อีกครั้ง");
+            return;
+        }
+
+        setStatus("done");
     }
 
     const isStart = kind === "job" && action === "start";
@@ -294,18 +263,10 @@ export default function ScanAction({ kind, action, id, onDone }) {
                         </div>
                         <div style={{ ...styles.title, color: "#C4372E" }}>เกิดข้อผิดพลาด</div>
                         <div style={styles.sub}>{errorMsg}</div>
-                        <div style={styles.btnRow}>
-                            <button className="ps-scan-cancel" style={styles.cancelBtn} onClick={onDone}>
-                                เข้าดูตารางงาน
-                            </button>
-                            <button style={{ ...styles.confirmBtn, background: "#2F6E86" }} onClick={handleRetry}>
-                                ลองอีกครั้ง
-                            </button>
-                        </div>
                     </>
                 )}
 
-                {status === "done" && (
+                {(status === "done" || status === "error") && (
                     <button className="ps-scan-btn" style={styles.btn} onClick={onDone}>
                         เข้าดูตารางงาน
                     </button>
