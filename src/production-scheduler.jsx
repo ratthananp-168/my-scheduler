@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
-import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, ChevronLeft, ChevronRight, QrCode, Play, Square, Zap } from "lucide-react";
 
 const NAV_ITEMS = [
     { id: "home", label: "Home", Icon: HomeIcon },
     { id: "schedule", label: "Schedule", Icon: CalendarDays },
     { id: "analytics", label: "Analytics", Icon: BarChart3 },
+    { id: "qrcodes", label: "QR Codes", Icon: QrCode },
 ];
 
 const DAY_ABBR_LOCALE = { weekday: "short" };
@@ -14,6 +15,10 @@ const ROW_HEIGHT = 64;
 const HEADER_HEIGHT = 52;
 const RESOURCE_COL_WIDTH = 168;
 const VIEW_DAY_OPTIONS = [7, 14, 30];
+
+const RUNNING_GREEN = "#00C853";
+const RUNNING_GREEN_DARK = "#00913C";
+const RUNNING_GREEN_LIGHT = "#00E676";
 
 const INITIAL_RESOURCES = [
     { id: "r1", name: "CNC-01", type: "CNC mill", status: "running" },
@@ -85,6 +90,7 @@ export default function ProductionScheduler() {
    const [jobs, setJobs] = useState(cloneJobs);
 const [resources, setResources] = useState(cloneResources);
 const [loaded, setLoaded] = useState(false);
+const skipNextRealtimeRef = useRef(false);
 
 useEffect(() => {
     supabase
@@ -101,9 +107,37 @@ useEffect(() => {
         });
 }, []);
 
+// listen for changes made by other people/tabs and apply them live
+useEffect(() => {
+    const channel = supabase
+        .channel("schedule_state_changes")
+        .on(
+            "postgres_changes",
+            { event: "UPDATE", schema: "public", table: "schedule_state", filter: "id=eq.1" },
+            (payload) => {
+                // ignore the echo of our own save
+                if (skipNextRealtimeRef.current) {
+                    skipNextRealtimeRef.current = false;
+                    return;
+                }
+                const incoming = payload.new?.data;
+                if (incoming) {
+                    if (incoming.jobs) setJobs(incoming.jobs);
+                    if (incoming.resources) setResources(incoming.resources);
+                }
+            }
+        )
+        .subscribe();
+
+    return () => {
+        supabase.removeChannel(channel);
+    };
+}, []);
+
 useEffect(() => {
     if (!loaded) return;
     const timer = setTimeout(() => {
+        skipNextRealtimeRef.current = true;
         supabase
             .from("schedule_state")
             .update({ data: { jobs, resources }, updated_at: new Date().toISOString() })
@@ -301,6 +335,14 @@ useEffect(() => {
         return { avgUtil, busiest, totalConflictJobs, bottlenecks };
     }, [resources, utilization, resourceConflictCounts, conflictIds]);
 
+    // jobs currently marked as running (from QR start/stop scans), paired with their resource
+    const runningNow = useMemo(() => {
+        return jobs
+            .filter((j) => j.isRunning && j.resourceId)
+            .map((j) => ({ job: j, resource: resources.find((r) => r.id === j.resourceId) || null }))
+            .filter((x) => x.resource);
+    }, [jobs, resources]);
+
     function handlePointerMove(e) {
         const d = dragRef.current;
         if (!d) return;
@@ -460,7 +502,7 @@ useEffect(() => {
         .ps-scroll::-webkit-scrollbar-thumb { background: #C7D5DA; border-radius: 6px; }
         .ps-scroll { scrollbar-width: thin; scrollbar-color: #C7D5DA #EEF2F3; }
         .ps-job:hover { filter: brightness(1.03); box-shadow: 0 4px 12px rgba(27,34,38,0.16) !important; }
-        .ps-chip:hover { box-shadow: 0 4px 12px rgba(27,34,38,0.12); }
+        .ps-chip:hover { box-shadow: 0 4px 12px rgba(27,110,134,0.12); }
         .ps-chip:active { cursor: grabbing; }
         .ps-zoombtn:hover { background: #EEF2F3; border-color: #B9CBD1; }
         .ps-addbtn:hover { background: #234F60 !important; }
@@ -477,6 +519,32 @@ useEffect(() => {
         .ps-sidebar:hover .ps-navlabel { opacity: 1; }
         .ps-sidebar:hover .ps-promo { opacity: 1; pointer-events: auto; }
         .ps-searchitem:hover { background: #EEF2F3 !important; }
+        @keyframes ps-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(0,200,83,0.55); } 50% { box-shadow: 0 0 0 5px rgba(0,200,83,0); } }
+        .ps-running-dot { animation: ps-pulse 1.4s ease-in-out infinite; }
+        @keyframes ps-job-glow { 0%, 100% { box-shadow: 0 0 0 2px rgba(0,200,83,0.55), 0 3px 12px rgba(0,200,83,0.35); } 50% { box-shadow: 0 0 0 6px rgba(0,200,83,0.16), 0 3px 12px rgba(0,200,83,0.35); } }
+        .ps-job-running {
+          background: linear-gradient(135deg, #00B84A 0%, #00D65E 55%, #00B84A 100%) !important;
+          border: 2px solid #00913C !important;
+          animation: ps-job-glow 1.7s ease-in-out infinite;
+        }
+        .ps-job-running::after {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: -70%;
+          width: 55%;
+          height: 100%;
+          background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.65) 50%, rgba(255,255,255,0) 100%);
+          animation: ps-running-sweep 1.6s linear infinite;
+          pointer-events: none;
+        }
+        @keyframes ps-running-sweep {
+          0% { left: -70%; }
+          100% { left: 130%; }
+        }
+        @keyframes ps-statusbar-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(0.85); } }
+        .ps-statusbar-dot { animation: ps-statusbar-dot 1.4s ease-in-out infinite; }
+        .ps-statuschip:hover { box-shadow: 0 3px 10px rgba(0,145,60,0.28); transform: translateY(-1px); }
       `}</style>
 
             <div style={styles.floatCard}>
@@ -530,7 +598,7 @@ useEffect(() => {
                     <div style={styles.toolbar}>
                         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
                             <span style={styles.appTitle}>
-                                {activeNav === "home" ? "Home" : activeNav === "analytics" ? "Analytics" : "Production Scheduler"}
+                                {activeNav === "home" ? "Home" : activeNav === "analytics" ? "Analytics" : activeNav === "qrcodes" ? "QR Codes" : "Production Scheduler"}
                             </span>
                             <span style={styles.appSub}>from {baseDate.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} · {DAYS} day{DAYS !== 1 ? "s" : ""} shown</span>
                         </div>
@@ -594,6 +662,33 @@ useEffect(() => {
                             )}
                         </div>
                     </div>
+
+                    {runningNow.length > 0 && (
+                        <div style={styles.statusBar}>
+                            <div style={styles.statusBarLabel}>
+                                <Zap size={13} color={RUNNING_GREEN_DARK} strokeWidth={2.5} />
+                                กำลังทำงานอยู่ ({runningNow.length})
+                            </div>
+                            <div style={styles.statusBarStrip} className="ps-scroll">
+                                {runningNow.map(({ job, resource }) => (
+                                    <div
+                                        key={job.id}
+                                        className="ps-statuschip"
+                                        style={styles.statusChip}
+                                        onClick={() => {
+                                            setActiveNav("schedule");
+                                            jumpToJob(job);
+                                        }}
+                                    >
+                                        <span className="ps-statusbar-dot" style={styles.statusChipDot} />
+                                        <span style={styles.statusChipResource}>{resource.name}</span>
+                                        <span style={styles.statusChipSep}>·</span>
+                                        <span style={styles.statusChipJob}>{job.name}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     {activeNav === "home" && (
                         <div className="ps-scroll" style={styles.homeWrap}>
@@ -1010,7 +1105,7 @@ useEffect(() => {
                                                             return (
                                                                 <div
                                                                     key={job.id}
-                                                                    className="ps-job"
+                                                                    className={`ps-job${job.isRunning ? " ps-job-running" : ""}`}
                                                                     onPointerDown={(e) => onJobPointerDown(e, job, "move")}
                                                                     style={{
                                                                         position: "absolute",
@@ -1018,7 +1113,7 @@ useEffect(() => {
                                                                         width: Math.max(6, job.duration * hourWidth - 2),
                                                                         top: 7,
                                                                         height: ROW_HEIGHT - 14,
-                                                                        background: job.locked ? `${color}22` : "#FFFFFF",
+                                                                        background: job.isRunning ? RUNNING_GREEN : job.locked ? `${color}22` : "#FFFFFF",
                                                                         border: isConflict ? "1px solid #F0625B" : job.locked ? `1px solid ${color}77` : "1px solid #E4EAEC",
                                                                         borderLeftWidth: 4,
                                                                         borderLeftColor: color,
@@ -1043,11 +1138,29 @@ useEffect(() => {
                                                                         />
                                                                     )}
                                                                     <div style={{ padding: "4px 7px", position: "relative", zIndex: 1 }}>
-                                                                        <div style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: "'IBM Plex Mono',monospace", fontSize: 11, color: "#1B2226", whiteSpace: "nowrap" }}>
-                                                                            {job.locked && <Lock size={9} color={color} strokeWidth={2.5} />}
+                                                                        <div
+                                                                            style={{
+                                                                                display: "flex",
+                                                                                alignItems: "center",
+                                                                                gap: 4,
+                                                                                fontFamily: "'IBM Plex Mono',monospace",
+                                                                                fontSize: 11,
+                                                                                color: job.isRunning ? "#FFFFFF" : "#1B2226",
+                                                                                whiteSpace: "nowrap",
+                                                                                textShadow: job.isRunning ? "0 1px 2px rgba(0,60,20,0.35)" : "none",
+                                                                            }}
+                                                                        >
+                                                                            {job.locked && <Lock size={9} color={job.isRunning ? "#FFFFFF" : color} strokeWidth={2.5} />}
                                                                             {job.name}
                                                                         </div>
-                                                                        <div style={{ fontSize: 10, color: "#7C8A93", whiteSpace: "nowrap" }}>{job.duration}h</div>
+                                                                        {job.isRunning ? (
+                                                                            <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9.5, fontWeight: 800, color: "#FFFFFF", letterSpacing: "0.05em", whiteSpace: "nowrap", textShadow: "0 1px 2px rgba(0,60,20,0.35)" }}>
+                                                                                <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "#FFFFFF", flexShrink: 0 }} />
+                                                                                RUNNING
+                                                                            </div>
+                                                                        ) : (
+                                                                            <div style={{ fontSize: 10, color: "#7C8A93", whiteSpace: "nowrap" }}>{job.duration}h</div>
+                                                                        )}
                                                                     </div>
                                                                     {isConflict && <AlertTriangle size={11} color="#F0625B" style={{ position: "absolute", top: 4, right: 4, zIndex: 2 }} />}
                                                                     {!job.locked && (
@@ -1274,6 +1387,56 @@ useEffect(() => {
                         </div>
                     )}
 
+                    {activeNav === "qrcodes" && (
+                        <div className="ps-scroll" style={styles.analyticsWrap}>
+                            <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+                                <div style={styles.qrIntro}>
+                                    <QrCode size={16} color="#2F6E86" />
+                                    <span>
+                                        สแกน START เพื่อเริ่มงาน สแกน STOP เพื่อหยุดงาน — 
+                                    </span>
+                                </div>
+                                <div style={styles.qrGrid}>
+                                    {scheduledJobs.map((job) => {
+                                        const origin = typeof window !== "undefined" ? window.location.origin : "";
+                                        const startUrl = `${origin}/?scan=start&job=${job.id}`;
+                                        const stopUrl = `${origin}/?scan=stop&job=${job.id}`;
+                                        const startImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(startUrl)}`;
+                                        const stopImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(stopUrl)}`;
+                                        const res = resources.find((r) => r.id === job.resourceId);
+                                        return (
+                                            <div key={job.id} style={styles.qrCard}>
+                                                <div style={styles.qrCardHeader}>
+                                                    <span style={{ ...styles.legendDot, background: PRODUCTS[job.product] }} />
+                                                    <span style={styles.qrJobName}>{job.name}</span>
+                                                    {job.isRunning && <span style={styles.qrRunningBadge}>running</span>}
+                                                </div>
+                                                <div style={styles.qrResourceName}>{res ? res.name : "unassigned"}</div>
+                                                <div style={styles.qrImages}>
+                                                    <div style={styles.qrImageBlock}>
+                                                        <img src={startImg} alt={`start ${job.name}`} style={styles.qrImage} />
+                                                        <div style={{ ...styles.qrLabel, color: "#17A2A0" }}>
+                                                            <Play size={11} /> START
+                                                        </div>
+                                                    </div>
+                                                    <div style={styles.qrImageBlock}>
+                                                        <img src={stopImg} alt={`stop ${job.name}`} style={styles.qrImage} />
+                                                        <div style={{ ...styles.qrLabel, color: "#C4372E" }}>
+                                                            <Square size={11} /> STOP
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                    {scheduledJobs.length === 0 && (
+                                        <div style={styles.bottleneckEmpty}>ยังไม่มีงานที่ถูกจัดตารางเลย</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {ghost && (
                         <div
                             style={{
@@ -1347,6 +1510,13 @@ useEffect(() => {
                                 <input type="checkbox" checked={selectedJob.locked} onChange={(e) => updateJob(selectedJob.id, { locked: e.target.checked })} />
                                 locked (cannot be dragged)
                             </label>
+
+                            {selectedJob.isRunning && (
+                                <div style={styles.runningNote}>
+                                    <CheckCircle2 size={13} style={{ marginRight: 6, flexShrink: 0 }} />
+                                    งานนี้กำลังทำงานอยู่ (สแกน START ล่าสุด)
+                                </div>
+                            )}
 
                             {conflictIds.has(selectedJob.id) && (
                                 <div style={styles.conflictNote}>
@@ -1538,6 +1708,51 @@ const styles = {
         padding: "4px 10px",
         fontFamily: "'IBM Plex Mono',monospace",
     },
+    statusBar: {
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        padding: "9px 18px",
+        borderBottom: "1px solid #BEEAC9",
+        background: "linear-gradient(90deg, #EAFBF0 0%, #F3FDF6 100%)",
+        flexWrap: "nowrap",
+    },
+    statusBarLabel: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 11.5,
+        fontWeight: 700,
+        color: RUNNING_GREEN_DARK,
+        fontFamily: "'Inter',sans-serif",
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+    },
+    statusBarStrip: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        overflowX: "auto",
+        flex: 1,
+        minWidth: 0,
+        paddingBottom: 1,
+    },
+    statusChip: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        flexShrink: 0,
+        background: "#FFFFFF",
+        border: `1px solid ${RUNNING_GREEN}66`,
+        borderRadius: 20,
+        padding: "5px 11px",
+        cursor: "pointer",
+        transition: "box-shadow 0.15s ease, transform 0.15s ease",
+    },
+    statusChipDot: { width: 7, height: 7, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 },
+    statusChipResource: { fontSize: 11.5, fontWeight: 700, color: "#1B2226", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
+    statusChipSep: { color: "#B7C4C9", fontSize: 11 },
+    statusChipJob: { fontSize: 11, color: "#5B6B72", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
     viewDaysGroup: {
         display: "flex",
         gap: 4,
@@ -1941,6 +2156,17 @@ const styles = {
         padding: "8px 10px",
         marginTop: 12,
     },
+    runningNote: {
+        display: "flex",
+        alignItems: "center",
+        fontSize: 11.5,
+        color: "#0F6E56",
+        background: "#E4F5EE",
+        border: "1px solid #B7E3D3",
+        borderRadius: 16,
+        padding: "8px 10px",
+        marginTop: 12,
+    },
     deleteBtn: {
         marginTop: 18,
         display: "flex",
@@ -1955,4 +2181,44 @@ const styles = {
         cursor: "pointer",
         fontFamily: "'Inter',sans-serif",
     },
+    qrIntro: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        fontSize: 12.5,
+        color: "#5B6B72",
+        background: "#F4F7F8",
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
+        padding: "10px 14px",
+        marginBottom: 16,
+    },
+    qrGrid: {
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+        gap: 14,
+    },
+    qrCard: {
+        background: "#FFFFFF",
+        border: "1px solid #E4EAEC",
+        borderRadius: 14,
+        padding: "14px 16px",
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
+    },
+    qrCardHeader: { display: "flex", alignItems: "center", gap: 6, marginBottom: 2 },
+    qrJobName: { fontSize: 12.5, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: "#1B2226" },
+    qrRunningBadge: {
+        marginLeft: "auto",
+        fontSize: 10,
+        color: "#17A2A0",
+        background: "#E4F5EE",
+        borderRadius: 20,
+        padding: "2px 8px",
+        fontFamily: "'IBM Plex Mono',monospace",
+    },
+    qrResourceName: { fontSize: 10.5, color: "#7C8A93", marginBottom: 10 },
+    qrImages: { display: "flex", gap: 10 },
+    qrImageBlock: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
+    qrImage: { width: "100%", maxWidth: 130, height: "auto", borderRadius: 8, border: "1px solid #E4EAEC" },
+    qrLabel: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, fontFamily: "'Inter',sans-serif" },
 };
