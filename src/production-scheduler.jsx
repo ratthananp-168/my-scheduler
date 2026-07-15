@@ -16,14 +16,14 @@ const HEADER_HEIGHT = 52;
 const RESOURCE_COL_WIDTH = 168;
 const VIEW_DAY_OPTIONS = [7, 14, 30];
 
-const RUNNING_GREEN = "#00e768";
+const RUNNING_GREEN = "#007A36";
 const RUNNING_GREEN_DARK = "#003D1B";
 const RUNNING_GREEN_LIGHT = "#00C853";
 
 // vivid green used only for the "running" job block in the Gantt chart (kept bright on purpose)
 const JOB_RUNNING_GREEN = "#00C853";
 
-const ALARM_RED = "#ff0d00";
+const ALARM_RED = "#FF2D20";
 const ALARM_RED_DARK = "#D6180A";
 
 const ALARM_REASONS = [
@@ -104,6 +104,13 @@ export default function ProductionScheduler() {
 const [resources, setResources] = useState(cloneResources);
 const [loaded, setLoaded] = useState(false);
 const skipNextRealtimeRef = useRef(false);
+// true when jobs/resources were just set FROM Supabase (initial load or a realtime event from
+// another tab/device), as opposed to a genuine local edit (drag, add job, raise alarm, etc).
+// Without this, applying a realtime update triggers the auto-save effect below, which writes
+// the same data straight back to Supabase - and if two tabs are open, each tab's "harmless" echo
+// triggers the other tab's echo in turn, forever, every ~1-2s. That loop can silently overwrite
+// a just-scanned change with a stale snapshot before you ever see it.
+const remoteUpdateRef = useRef(false);
 
 useEffect(() => {
     supabase
@@ -112,6 +119,7 @@ useEffect(() => {
         .eq("id", 1)
         .single()
         .then(({ data, error }) => {
+            remoteUpdateRef.current = true;
             if (!error && data?.data && Object.keys(data.data).length > 0) {
                 setJobs(data.data.jobs || cloneJobs());
                 setResources(data.data.resources || cloneResources());
@@ -135,6 +143,7 @@ useEffect(() => {
                 }
                 const incoming = payload.new?.data;
                 if (incoming) {
+                    remoteUpdateRef.current = true;
                     if (incoming.jobs) setJobs(incoming.jobs);
                     if (incoming.resources) setResources(incoming.resources);
                 }
@@ -149,6 +158,12 @@ useEffect(() => {
 
 useEffect(() => {
     if (!loaded) return;
+    // this change came from Supabase itself (initial load or another tab's realtime event) -
+    // it already matches the database, so writing it back would just feed the echo loop
+    if (remoteUpdateRef.current) {
+        remoteUpdateRef.current = false;
+        return;
+    }
     const timer = setTimeout(() => {
         skipNextRealtimeRef.current = true;
         supabase
@@ -552,7 +567,7 @@ useEffect(() => {
         .ps-searchitem:hover { background: #EEF2F3 !important; }
         @keyframes ps-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(0,200,83,0.55); } 50% { box-shadow: 0 0 0 5px rgba(0,200,83,0); } }
         .ps-running-dot { animation: ps-pulse 1.4s ease-in-out infinite; }
-        @keyframes ps-job-glow { 0%, 100% { box-shadow: 0 0 0 2px rgba(4, 188, 81, 0.8), 0 3px 12px rgba(0,200,83,0.35); } 50% { box-shadow: 0 0 0 6px rgba(0,200,83,0.16), 0 3px 12px rgba(0,200,83,0.35); } }
+        @keyframes ps-job-glow { 0%, 100% { box-shadow: 0 0 0 2px rgba(0,200,83,0.55), 0 3px 12px rgba(0,200,83,0.35); } 50% { box-shadow: 0 0 0 6px rgba(0,200,83,0.16), 0 3px 12px rgba(0,200,83,0.35); } }
         .ps-job-running {
           background: linear-gradient(135deg, #00B84A 0%, #00D65E 55%, #00B84A 100%) !important;
           border: 2px solid #00913C !important;
@@ -576,12 +591,12 @@ useEffect(() => {
         @keyframes ps-statusbar-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(0.85); } }
         .ps-statusbar-dot { animation: ps-statusbar-dot 1.4s ease-in-out infinite; }
         .ps-statuschip:hover { box-shadow: 0 3px 10px rgba(0,61,27,0.35); transform: translateY(-1px); }
-        @keyframes ps-alarm-dot { 0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(249, 12, 0, 0.93); } 50% { opacity: 0.5; transform: scale(0.82); box-shadow: 0 0 0 5px rgba(255,45,32,0); } }
+        @keyframes ps-alarm-dot { 0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(255,45,32,0.6); } 50% { opacity: 0.5; transform: scale(0.82); box-shadow: 0 0 0 5px rgba(255,45,32,0); } }
         .ps-alarm-dot { animation: ps-alarm-dot 0.9s ease-in-out infinite; }
-        @keyframes ps-alarmbar-bg { 0%, 100% { background: linear-gradient(90deg, #fe4545 0%, #ff634b 100%); } 50% { background: linear-gradient(90deg, #FFC2B8 0%, #FFEAE7 100%); } }
+        @keyframes ps-alarmbar-bg { 0%, 100% { background: linear-gradient(90deg, #FFEAE7 0%, #FFF8F7 100%); } 50% { background: linear-gradient(90deg, #FFC2B8 0%, #FFEAE7 100%); } }
         .ps-alarmbar { animation: ps-alarmbar-bg 1.3s ease-in-out infinite; }
-        .ps-alarmchip:hover { box-shadow: 0 3px 10px rgb(254, 13, 0); transform: translateY(-1px); }
-        @keyframes ps-alarm-row-flash { 0%, 100% { background: #fe3e3e; } 50% { background: #FDEBEA; } }
+        .ps-alarmchip:hover { box-shadow: 0 3px 10px rgba(214,24,10,0.35); transform: translateY(-1px); }
+        @keyframes ps-alarm-row-flash { 0%, 100% { background: #FFFFFF; } 50% { background: #FDEBEA; } }
         .ps-alarm-row { animation: ps-alarm-row-flash 1.1s ease-in-out infinite; }
         .ps-alarmraisebtn:hover { background: ${ALARM_RED_DARK} !important; }
       `}</style>
@@ -1505,7 +1520,7 @@ useEffect(() => {
                                 <div style={styles.qrIntro}>
                                     <QrCode size={16} color="#2F6E86" />
                                     <span>
-                                        สแกน START เพื่อเริ่มงาน สแกน STOP เพื่อหยุดงาน 
+                                        สแกน START เพื่อเริ่มงาน สแกน STOP เพื่อหยุดงาน — ปริ้นแปะไว้หน้างานจริงได้เลย
                                     </span>
                                 </div>
                                 <div style={styles.qrGrid}>
@@ -1542,14 +1557,14 @@ useEffect(() => {
                                         );
                                     })}
                                     {scheduledJobs.length === 0 && (
-                                        <div style={styles.bottleneckEmpty}>ยังไม่มีงานที่ถูกจัดตาราง</div>
+                                        <div style={styles.bottleneckEmpty}>ยังไม่มีงานที่ถูกจัดตารางเลย</div>
                                     )}
                                 </div>
 
                                 <div style={{ ...styles.qrIntro, marginTop: 24, borderColor: "#F7CFCB", background: "#FEF6F5" }}>
                                     <AlertOctagon size={16} color={ALARM_RED_DARK} />
                                     <span>
-                                        สแกน ALARM เพื่อแจ้งเตือนปัญหาเครื่องจักร สแกน CLEAR เพื่อยกเลิกแจ้งเตือน 
+                                        สแกน ALARM เพื่อแจ้งเตือนปัญหาเครื่องจักร สแกน CLEAR เพื่อยกเลิกแจ้งเตือน — ปริ้นแปะไว้ที่ตัวเครื่องได้เลย
                                     </span>
                                 </div>
                                 <div style={styles.qrGrid}>
@@ -1670,14 +1685,14 @@ useEffect(() => {
                             {selectedJob.isRunning && (
                                 <div style={styles.runningNote}>
                                     <CheckCircle2 size={13} style={{ marginRight: 6, flexShrink: 0 }} />
-                                    งานนี้กำลังทำงานอยู่ 
+                                    งานนี้กำลังทำงานอยู่ (สแกน START ล่าสุด)
                                 </div>
                             )}
 
                             {isJobBlocked(selectedJob) && (
                                 <div style={styles.alarmActiveNote}>
                                     <AlertOctagon size={13} style={{ marginRight: 6, flexShrink: 0 }} />
-                                    เครื่องนี้มีการแจ้งเตือนอยู่ — กรุณาเคลียร์การแจ้งเตือนก่อนเริ่มงาน
+                                    เครื่องนี้มีการแจ้งเตือนอยู่ — ห้ามเริ่ม/ลากงานจนกว่าจะเคลียร์
                                 </div>
                             )}
 
@@ -1915,7 +1930,7 @@ const styles = {
         gap: 14,
         padding: "9px 18px",
         borderBottom: "1px solid #8FE0AF",
-        background: "linear-gradient(90deg, #24e26d 0%, #24e26d 100%)",
+        background: "linear-gradient(90deg, #DFF7E8 0%, #F2FCF6 100%)",
         flexWrap: "nowrap",
     },
     statusBarLabel: {
