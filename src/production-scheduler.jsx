@@ -16,17 +16,30 @@ const HEADER_HEIGHT = 52;
 const RESOURCE_COL_WIDTH = 168;
 const VIEW_DAY_OPTIONS = [7, 14, 30];
 
-const RUNNING_GREEN = "#00C853";
-const RUNNING_GREEN_DARK = "#00913C";
-const RUNNING_GREEN_LIGHT = "#00E676";
+const RUNNING_GREEN = "#00e768";
+const RUNNING_GREEN_DARK = "#003D1B";
+const RUNNING_GREEN_LIGHT = "#00C853";
+
+// vivid green used only for the "running" job block in the Gantt chart (kept bright on purpose)
+const JOB_RUNNING_GREEN = "#00C853";
+
+const ALARM_RED = "#ff0d00";
+const ALARM_RED_DARK = "#D6180A";
+
+const ALARM_REASONS = [
+    { id: "breakdown", label: "เครื่องขัดข้อง" },
+    { id: "material", label: "ขาดวัตถุดิบ" },
+    { id: "quality", label: "ปัญหาคุณภาพ" },
+    { id: "other", label: "ต้องการความช่วยเหลือ" },
+];
 
 const INITIAL_RESOURCES = [
-    { id: "r1", name: "CNC-01", type: "CNC mill", status: "running" },
-    { id: "r2", name: "CNC-02", type: "CNC mill", status: "idle" },
-    { id: "r3", name: "PRESS-A", type: "Stamping press", status: "running" },
-    { id: "r4", name: "PRESS-B", type: "Stamping press", status: "maintenance" },
-    { id: "r5", name: "ASSY-01", type: "Assembly line", status: "running" },
-    { id: "r6", name: "PAINT-01", type: "Paint booth", status: "down" },
+    { id: "r1", name: "CNC-01", type: "CNC mill", status: "running", alarmActive: false, alarmReason: null },
+    { id: "r2", name: "CNC-02", type: "CNC mill", status: "idle", alarmActive: false, alarmReason: null },
+    { id: "r3", name: "PRESS-A", type: "Stamping press", status: "running", alarmActive: false, alarmReason: null },
+    { id: "r4", name: "PRESS-B", type: "Stamping press", status: "maintenance", alarmActive: false, alarmReason: null },
+    { id: "r5", name: "ASSY-01", type: "Assembly line", status: "running", alarmActive: false, alarmReason: null },
+    { id: "r6", name: "PAINT-01", type: "Paint booth", status: "down", alarmActive: false, alarmReason: null },
 ];
 
 const PRODUCTS = {
@@ -159,6 +172,7 @@ useEffect(() => {
     const [viewDays, setViewDays] = useState(7);
     const [filterFromDate, setFilterFromDate] = useState("");
     const [filterToDate, setFilterToDate] = useState("");
+    const [pendingAlarmReason, setPendingAlarmReason] = useState(ALARM_REASONS[0].id);
 
     const DAYS = viewDays;
     const TOTAL_HOURS = DAYS * 24;
@@ -343,6 +357,23 @@ useEffect(() => {
             .filter((x) => x.resource);
     }, [jobs, resources]);
 
+    // resources with an active alarm (from QR alarm scans or manual trigger)
+    const activeAlarms = useMemo(() => resources.filter((r) => r.alarmActive), [resources]);
+
+    function raiseAlarm(resourceId, reasonId) {
+        setResources((rs) => rs.map((r) => (r.id === resourceId ? { ...r, alarmActive: true, alarmReason: reasonId, alarmAt: Date.now() } : r)));
+    }
+
+    function clearAlarm(resourceId) {
+        setResources((rs) => rs.map((r) => (r.id === resourceId ? { ...r, alarmActive: false, alarmReason: null, alarmAt: null } : r)));
+    }
+
+    // jobs on a resource that currently has an active alarm can't be dragged or started
+    function isJobBlocked(job) {
+        const res = resources.find((r) => r.id === job.resourceId);
+        return !!res?.alarmActive;
+    }
+
     function handlePointerMove(e) {
         const d = dragRef.current;
         if (!d) return;
@@ -406,7 +437,7 @@ useEffect(() => {
         e.stopPropagation();
         setSelectedJobId(job.id);
         setSelectedResourceId(null);
-        if (job.locked) return;
+        if (job.locked || isJobBlocked(job)) return;
         const rowIndex = resources.findIndex((r) => r.id === job.resourceId);
         dragRef.current = {
             jobId: job.id,
@@ -473,7 +504,7 @@ useEffect(() => {
     function addResource() {
         const n = resources.length + 1;
         const id = "new-r-" + Date.now();
-        const newResource = { id, name: "RES-" + n, type: "Machine", status: "idle" };
+        const newResource = { id, name: "RES-" + n, type: "Machine", status: "idle", alarmActive: false, alarmReason: null };
         setResources((rs) => [...rs, newResource]);
         setSelectedResourceId(id);
         setSelectedJobId(null);
@@ -521,7 +552,7 @@ useEffect(() => {
         .ps-searchitem:hover { background: #EEF2F3 !important; }
         @keyframes ps-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(0,200,83,0.55); } 50% { box-shadow: 0 0 0 5px rgba(0,200,83,0); } }
         .ps-running-dot { animation: ps-pulse 1.4s ease-in-out infinite; }
-        @keyframes ps-job-glow { 0%, 100% { box-shadow: 0 0 0 2px rgba(0,200,83,0.55), 0 3px 12px rgba(0,200,83,0.35); } 50% { box-shadow: 0 0 0 6px rgba(0,200,83,0.16), 0 3px 12px rgba(0,200,83,0.35); } }
+        @keyframes ps-job-glow { 0%, 100% { box-shadow: 0 0 0 2px rgba(4, 188, 81, 0.8), 0 3px 12px rgba(0,200,83,0.35); } 50% { box-shadow: 0 0 0 6px rgba(0,200,83,0.16), 0 3px 12px rgba(0,200,83,0.35); } }
         .ps-job-running {
           background: linear-gradient(135deg, #00B84A 0%, #00D65E 55%, #00B84A 100%) !important;
           border: 2px solid #00913C !important;
@@ -544,7 +575,15 @@ useEffect(() => {
         }
         @keyframes ps-statusbar-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(0.85); } }
         .ps-statusbar-dot { animation: ps-statusbar-dot 1.4s ease-in-out infinite; }
-        .ps-statuschip:hover { box-shadow: 0 3px 10px rgba(0,145,60,0.28); transform: translateY(-1px); }
+        .ps-statuschip:hover { box-shadow: 0 3px 10px rgba(0,61,27,0.35); transform: translateY(-1px); }
+        @keyframes ps-alarm-dot { 0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(249, 12, 0, 0.93); } 50% { opacity: 0.5; transform: scale(0.82); box-shadow: 0 0 0 5px rgba(255,45,32,0); } }
+        .ps-alarm-dot { animation: ps-alarm-dot 0.9s ease-in-out infinite; }
+        @keyframes ps-alarmbar-bg { 0%, 100% { background: linear-gradient(90deg, #fe4545 0%, #ff634b 100%); } 50% { background: linear-gradient(90deg, #FFC2B8 0%, #FFEAE7 100%); } }
+        .ps-alarmbar { animation: ps-alarmbar-bg 1.3s ease-in-out infinite; }
+        .ps-alarmchip:hover { box-shadow: 0 3px 10px rgb(254, 13, 0); transform: translateY(-1px); }
+        @keyframes ps-alarm-row-flash { 0%, 100% { background: #fe3e3e; } 50% { background: #FDEBEA; } }
+        .ps-alarm-row { animation: ps-alarm-row-flash 1.1s ease-in-out infinite; }
+        .ps-alarmraisebtn:hover { background: ${ALARM_RED_DARK} !important; }
       `}</style>
 
             <div style={styles.floatCard}>
@@ -663,6 +702,37 @@ useEffect(() => {
                         </div>
                     </div>
 
+                    {activeAlarms.length > 0 && (
+                        <div className="ps-alarmbar" style={styles.alarmBar}>
+                            <div style={styles.alarmBarLabel}>
+                                <AlertOctagon size={13} color={ALARM_RED_DARK} strokeWidth={2.5} />
+                                แจ้งเตือน ({activeAlarms.length})
+                            </div>
+                            <div style={styles.statusBarStrip} className="ps-scroll">
+                                {activeAlarms.map((r) => (
+                                    <div key={r.id} className="ps-alarmchip" style={styles.alarmChip}>
+                                        <span className="ps-alarm-dot" style={styles.alarmChipDot} />
+                                        <span
+                                            style={styles.statusChipResource}
+                                            onClick={() => {
+                                                setActiveNav("schedule");
+                                                setSelectedResourceId(r.id);
+                                                setSelectedJobId(null);
+                                            }}
+                                        >
+                                            {r.name}
+                                        </span>
+                                        <span style={styles.statusChipSep}>·</span>
+                                        <span style={styles.alarmChipReason}>{ALARM_REASONS.find((a) => a.id === r.alarmReason)?.label || "แจ้งเตือน"}</span>
+                                        <button style={styles.alarmChipClear} onClick={() => clearAlarm(r.id)} title="clear alarm">
+                                            <X size={11} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     {runningNow.length > 0 && (
                         <div style={styles.statusBar}>
                             <div style={styles.statusBarLabel}>
@@ -745,6 +815,22 @@ useEffect(() => {
                                     <span style={{ ...styles.homeStatValue, color: conflictCount ? "#C4372E" : "#1B2226" }}>{conflictCount}</span>
                                     <span style={styles.homeStatLabel}>jobs in conflict</span>
                                 </div>
+                                <div
+                                    style={{ ...styles.homeStatCard, cursor: "pointer" }}
+                                    onClick={() => {
+                                        if (activeAlarms[0]) {
+                                            setActiveNav("schedule");
+                                            setSelectedResourceId(activeAlarms[0].id);
+                                            setSelectedJobId(null);
+                                        }
+                                    }}
+                                >
+                                    <div style={{ ...styles.homeStatIcon, background: activeAlarms.length ? "#FDECEB" : "#E4F5EE" }}>
+                                        <AlertOctagon size={17} color={activeAlarms.length ? ALARM_RED : "#17A2A0"} />
+                                    </div>
+                                    <span style={{ ...styles.homeStatValue, color: activeAlarms.length ? ALARM_RED_DARK : "#1B2226" }}>{activeAlarms.length}</span>
+                                    <span style={styles.homeStatLabel}>active alarms</span>
+                                </div>
                             </div>
 
                             <div style={styles.homeBottomGrid}>
@@ -769,8 +855,16 @@ useEffect(() => {
                                                     <meta.Icon size={14} color={meta.color} />
                                                     <span style={styles.utilRowName}>{r.name}</span>
                                                     <span style={styles.resourceType}>{r.type}</span>
-                                                    <span style={{ ...styles.bottleneckBadge, background: "#F7F9FA", color: meta.color, borderColor: "#DCE4E7", marginLeft: "auto" }}>
-                                                        {meta.label}
+                                                    <span
+                                                        style={{
+                                                            ...styles.bottleneckBadge,
+                                                            background: r.alarmActive ? "#FDECEB" : "#F7F9FA",
+                                                            color: r.alarmActive ? ALARM_RED_DARK : meta.color,
+                                                            borderColor: r.alarmActive ? "#F7CFCB" : "#DCE4E7",
+                                                            marginLeft: "auto",
+                                                        }}
+                                                    >
+                                                        {r.alarmActive ? "ALARM" : meta.label}
                                                     </span>
                                                 </div>
                                             );
@@ -1031,7 +1125,13 @@ useEffect(() => {
                                         return (
                                             <div key={r.id} style={{ display: "flex", height: ROW_HEIGHT }}>
                                                 <div
-                                                    style={{ ...styles.resourceCell, cursor: "pointer", background: selectedResourceId === r.id ? "#EEF2F3" : "#FFFFFF" }}
+                                                    className={r.alarmActive ? "ps-alarm-row" : undefined}
+                                                    style={{
+                                                        ...styles.resourceCell,
+                                                        cursor: "pointer",
+                                                        background: selectedResourceId === r.id ? "#EEF2F3" : "#FFFFFF",
+                                                        borderLeft: r.alarmActive ? `3px solid ${ALARM_RED}` : "3px solid transparent",
+                                                    }}
                                                     onPointerDown={(e) => e.stopPropagation()}
                                                     onClick={() => {
                                                         setSelectedResourceId(r.id);
@@ -1041,6 +1141,7 @@ useEffect(() => {
                                                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                                                         <meta.Icon size={13} color={meta.color} />
                                                         <span style={styles.resourceName}>{r.name}</span>
+                                                        {r.alarmActive && <AlertOctagon size={12} color={ALARM_RED} strokeWidth={2.5} />}
                                                     </div>
                                                     <span style={styles.resourceType}>{r.type}</span>
                                                     <div style={styles.utilTrack}>
@@ -1102,10 +1203,11 @@ useEffect(() => {
                                                             const color = PRODUCTS[job.product];
                                                             const selected = selectedJobId === job.id;
                                                             const dimmed = isFilterActive && !jobMatchesFilter(job);
+                                                            const blocked = isJobBlocked(job);
                                                             return (
                                                                 <div
                                                                     key={job.id}
-                                                                    className={`ps-job${job.isRunning ? " ps-job-running" : ""}`}
+                                                                    className={`ps-job${job.isRunning && !blocked ? " ps-job-running" : ""}`}
                                                                     onPointerDown={(e) => onJobPointerDown(e, job, "move")}
                                                                     style={{
                                                                         position: "absolute",
@@ -1113,13 +1215,13 @@ useEffect(() => {
                                                                         width: Math.max(6, job.duration * hourWidth - 2),
                                                                         top: 7,
                                                                         height: ROW_HEIGHT - 14,
-                                                                        background: job.isRunning ? RUNNING_GREEN : job.locked ? `${color}22` : "#FFFFFF",
-                                                                        border: isConflict ? "1px solid #F0625B" : job.locked ? `1px solid ${color}77` : "1px solid #E4EAEC",
+                                                                        background: blocked ? "#FBE4E2" : job.isRunning ? JOB_RUNNING_GREEN : job.locked ? `${color}22` : "#FFFFFF",
+                                                                        border: blocked ? `1px solid ${ALARM_RED}99` : isConflict ? "1px solid #F0625B" : job.locked ? `1px solid ${color}77` : "1px solid #E4EAEC",
                                                                         borderLeftWidth: 4,
-                                                                        borderLeftColor: color,
+                                                                        borderLeftColor: blocked ? ALARM_RED : color,
                                                                         boxShadow: selected ? `0 0 0 2px ${color}55, 0 4px 10px rgba(47,110,134,0.12)` : "0 1px 4px rgba(47,110,134,0.08)",
                                                                         borderRadius: 12,
-                                                                        cursor: job.locked ? "pointer" : "grab",
+                                                                        cursor: blocked ? "not-allowed" : job.locked ? "pointer" : "grab",
                                                                         overflow: "hidden",
                                                                         userSelect: "none",
                                                                         boxSizing: "border-box",
@@ -1128,12 +1230,14 @@ useEffect(() => {
                                                                         transition: "opacity 0.15s ease",
                                                                     }}
                                                                 >
-                                                                    {job.locked && (
+                                                                    {(job.locked || blocked) && (
                                                                         <div
                                                                             style={{
                                                                                 position: "absolute",
                                                                                 inset: 0,
-                                                                                backgroundImage: `repeating-linear-gradient(135deg, transparent, transparent 6px, ${color}30 6px, ${color}30 12px)`,
+                                                                                backgroundImage: blocked
+                                                                                    ? `repeating-linear-gradient(135deg, transparent, transparent 6px, ${ALARM_RED}26 6px, ${ALARM_RED}26 12px)`
+                                                                                    : `repeating-linear-gradient(135deg, transparent, transparent 6px, ${color}30 6px, ${color}30 12px)`,
                                                                             }}
                                                                         />
                                                                     )}
@@ -1145,15 +1249,23 @@ useEffect(() => {
                                                                                 gap: 4,
                                                                                 fontFamily: "'IBM Plex Mono',monospace",
                                                                                 fontSize: 11,
-                                                                                color: job.isRunning ? "#FFFFFF" : "#1B2226",
+                                                                                color: blocked ? ALARM_RED_DARK : job.isRunning ? "#FFFFFF" : "#1B2226",
                                                                                 whiteSpace: "nowrap",
-                                                                                textShadow: job.isRunning ? "0 1px 2px rgba(0,60,20,0.35)" : "none",
+                                                                                textShadow: job.isRunning && !blocked ? "0 1px 2px rgba(0,60,20,0.35)" : "none",
                                                                             }}
                                                                         >
-                                                                            {job.locked && <Lock size={9} color={job.isRunning ? "#FFFFFF" : color} strokeWidth={2.5} />}
+                                                                            {blocked ? (
+                                                                                <AlertOctagon size={9} color={ALARM_RED_DARK} strokeWidth={2.5} />
+                                                                            ) : (
+                                                                                job.locked && <Lock size={9} color={job.isRunning ? "#FFFFFF" : color} strokeWidth={2.5} />
+                                                                            )}
                                                                             {job.name}
                                                                         </div>
-                                                                        {job.isRunning ? (
+                                                                        {blocked ? (
+                                                                            <div style={{ fontSize: 9.5, fontWeight: 800, color: ALARM_RED_DARK, letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
+                                                                                BLOCKED
+                                                                            </div>
+                                                                        ) : job.isRunning ? (
                                                                             <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9.5, fontWeight: 800, color: "#FFFFFF", letterSpacing: "0.05em", whiteSpace: "nowrap", textShadow: "0 1px 2px rgba(0,60,20,0.35)" }}>
                                                                                 <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "#FFFFFF", flexShrink: 0 }} />
                                                                                 RUNNING
@@ -1163,7 +1275,7 @@ useEffect(() => {
                                                                         )}
                                                                     </div>
                                                                     {isConflict && <AlertTriangle size={11} color="#F0625B" style={{ position: "absolute", top: 4, right: 4, zIndex: 2 }} />}
-                                                                    {!job.locked && (
+                                                                    {!job.locked && !blocked && (
                                                                         <div
                                                                             onPointerDown={(e) => onJobPointerDown(e, job, "resize")}
                                                                             style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 8, cursor: "ew-resize" }}
@@ -1393,7 +1505,7 @@ useEffect(() => {
                                 <div style={styles.qrIntro}>
                                     <QrCode size={16} color="#2F6E86" />
                                     <span>
-                                        สแกน START เพื่อเริ่มงาน สแกน STOP เพื่อหยุดงาน — 
+                                        สแกน START เพื่อเริ่มงาน สแกน STOP เพื่อหยุดงาน 
                                     </span>
                                 </div>
                                 <div style={styles.qrGrid}>
@@ -1430,7 +1542,51 @@ useEffect(() => {
                                         );
                                     })}
                                     {scheduledJobs.length === 0 && (
-                                        <div style={styles.bottleneckEmpty}>ยังไม่มีงานที่ถูกจัดตารางเลย</div>
+                                        <div style={styles.bottleneckEmpty}>ยังไม่มีงานที่ถูกจัดตาราง</div>
+                                    )}
+                                </div>
+
+                                <div style={{ ...styles.qrIntro, marginTop: 24, borderColor: "#F7CFCB", background: "#FEF6F5" }}>
+                                    <AlertOctagon size={16} color={ALARM_RED_DARK} />
+                                    <span>
+                                        สแกน ALARM เพื่อแจ้งเตือนปัญหาเครื่องจักร สแกน CLEAR เพื่อยกเลิกแจ้งเตือน 
+                                    </span>
+                                </div>
+                                <div style={styles.qrGrid}>
+                                    {resources.map((r) => {
+                                        const origin = typeof window !== "undefined" ? window.location.origin : "";
+                                        const alarmUrl = `${origin}/?alarm=raise&resource=${r.id}`;
+                                        const clearUrl = `${origin}/?alarm=clear&resource=${r.id}`;
+                                        const alarmImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(alarmUrl)}`;
+                                        const clearImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(clearUrl)}`;
+                                        const meta = STATUS_META[r.status];
+                                        return (
+                                            <div key={r.id} style={styles.qrCard}>
+                                                <div style={styles.qrCardHeader}>
+                                                    <meta.Icon size={13} color={meta.color} />
+                                                    <span style={styles.qrJobName}>{r.name}</span>
+                                                    {r.alarmActive && <span style={styles.qrAlarmBadge}>alarm</span>}
+                                                </div>
+                                                <div style={styles.qrResourceName}>{r.type}</div>
+                                                <div style={styles.qrImages}>
+                                                    <div style={styles.qrImageBlock}>
+                                                        <img src={alarmImg} alt={`alarm ${r.name}`} style={styles.qrImage} />
+                                                        <div style={{ ...styles.qrLabel, color: ALARM_RED_DARK }}>
+                                                            <AlertOctagon size={11} /> ALARM
+                                                        </div>
+                                                    </div>
+                                                    <div style={styles.qrImageBlock}>
+                                                        <img src={clearImg} alt={`clear ${r.name}`} style={styles.qrImage} />
+                                                        <div style={{ ...styles.qrLabel, color: "#17A2A0" }}>
+                                                            <CheckCircle2 size={11} /> CLEAR
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                    {resources.length === 0 && (
+                                        <div style={styles.bottleneckEmpty}>ยังไม่มีเครื่องจักรในระบบ</div>
                                     )}
                                 </div>
                             </div>
@@ -1514,7 +1670,14 @@ useEffect(() => {
                             {selectedJob.isRunning && (
                                 <div style={styles.runningNote}>
                                     <CheckCircle2 size={13} style={{ marginRight: 6, flexShrink: 0 }} />
-                                    งานนี้กำลังทำงานอยู่ (สแกน START ล่าสุด)
+                                    งานนี้กำลังทำงานอยู่ 
+                                </div>
+                            )}
+
+                            {isJobBlocked(selectedJob) && (
+                                <div style={styles.alarmActiveNote}>
+                                    <AlertOctagon size={13} style={{ marginRight: 6, flexShrink: 0 }} />
+                                    เครื่องนี้มีการแจ้งเตือนอยู่ — กรุณาเคลียร์การแจ้งเตือนก่อนเริ่มงาน
                                 </div>
                             )}
 
@@ -1558,6 +1721,43 @@ useEffect(() => {
                                 {utilization[selectedResource.id]}% booked this week
                             </div>
 
+                            <label style={{ ...styles.fieldLabel, marginTop: 14 }}>alarm</label>
+                            {selectedResource.alarmActive ? (
+                                <div style={styles.alarmActiveNote}>
+                                    <AlertOctagon size={13} style={{ marginRight: 6, flexShrink: 0 }} />
+                                    {ALARM_REASONS.find((a) => a.id === selectedResource.alarmReason)?.label || "แจ้งเตือน"}
+                                </div>
+                            ) : (
+                                <div style={{ fontSize: 11.5, color: "#7C8A93" }}>ไม่มีการแจ้งเตือน</div>
+                            )}
+
+                            {!selectedResource.alarmActive && (
+                                <select
+                                    className="ps-select"
+                                    style={{ marginTop: 8 }}
+                                    value={pendingAlarmReason}
+                                    onChange={(e) => setPendingAlarmReason(e.target.value)}
+                                >
+                                    {ALARM_REASONS.map((a) => (
+                                        <option key={a.id} value={a.id}>{a.label}</option>
+                                    ))}
+                                </select>
+                            )}
+
+                            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                                {selectedResource.alarmActive ? (
+                                    <button style={styles.alarmClearBtn} onClick={() => clearAlarm(selectedResource.id)}>
+                                        <CheckCircle2 size={13} style={{ marginRight: 6 }} />
+                                        clear alarm
+                                    </button>
+                                ) : (
+                                    <button className="ps-alarmraisebtn" style={styles.alarmRaiseBtn} onClick={() => raiseAlarm(selectedResource.id, pendingAlarmReason)}>
+                                        <AlertOctagon size={13} style={{ marginRight: 6 }} />
+                                        raise alarm
+                                    </button>
+                                )}
+                            </div>
+
                             <button style={styles.deleteBtn} onClick={() => deleteResource(selectedResource.id)}>
                                 <Trash2 size={13} style={{ marginRight: 6 }} />
                                 delete resource
@@ -1566,6 +1766,7 @@ useEffect(() => {
                     )}
                 </div>
             </div>
+
         </div>
     );
 }
@@ -1713,8 +1914,8 @@ const styles = {
         alignItems: "center",
         gap: 14,
         padding: "9px 18px",
-        borderBottom: "1px solid #BEEAC9",
-        background: "linear-gradient(90deg, #EAFBF0 0%, #F3FDF6 100%)",
+        borderBottom: "1px solid #8FE0AF",
+        background: "linear-gradient(90deg, #24e26d 0%, #24e26d 100%)",
         flexWrap: "nowrap",
     },
     statusBarLabel: {
@@ -1750,9 +1951,105 @@ const styles = {
         transition: "box-shadow 0.15s ease, transform 0.15s ease",
     },
     statusChipDot: { width: 7, height: 7, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 },
-    statusChipResource: { fontSize: 11.5, fontWeight: 700, color: "#1B2226", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
+    statusChipResource: { fontSize: 11.5, fontWeight: 700, color: "#1B2226", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap", cursor: "pointer" },
     statusChipSep: { color: "#B7C4C9", fontSize: 11 },
     statusChipJob: { fontSize: 11, color: "#5B6B72", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
+    alarmBar: {
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        padding: "9px 18px",
+        borderBottom: "1px solid #FFAFA6",
+        flexWrap: "nowrap",
+    },
+    alarmBarLabel: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 11.5,
+        fontWeight: 700,
+        color: ALARM_RED_DARK,
+        fontFamily: "'Inter',sans-serif",
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+    },
+    alarmChip: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        flexShrink: 0,
+        background: "#FFFFFF",
+        border: `1px solid ${ALARM_RED}66`,
+        borderRadius: 20,
+        padding: "5px 6px 5px 11px",
+        transition: "box-shadow 0.15s ease, transform 0.15s ease",
+    },
+    alarmChipDot: { width: 7, height: 7, borderRadius: "50%", background: ALARM_RED, flexShrink: 0 },
+    alarmChipReason: { fontSize: 11, color: "#8A4842", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
+    alarmChipClear: {
+        border: "none",
+        background: "#FDECEB",
+        color: ALARM_RED_DARK,
+        borderRadius: "50%",
+        width: 18,
+        height: 18,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+        flexShrink: 0,
+        marginLeft: 2,
+        padding: 0,
+    },
+    alarmActiveNote: {
+        display: "flex",
+        alignItems: "center",
+        fontSize: 11.5,
+        color: ALARM_RED_DARK,
+        background: "#FDECEB",
+        border: "1px solid #F7CFCB",
+        borderRadius: 16,
+        padding: "8px 10px",
+    },
+    alarmRaiseBtn: {
+        flex: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: ALARM_RED,
+        color: "#FFFFFF",
+        border: "none",
+        borderRadius: 10,
+        padding: "8px 10px",
+        fontSize: 11.5,
+        fontWeight: 600,
+        cursor: "pointer",
+        fontFamily: "'Inter',sans-serif",
+    },
+    alarmClearBtn: {
+        flex: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "none",
+        border: "1px solid #B7E3D3",
+        color: "#0F6E56",
+        borderRadius: 10,
+        padding: "8px 10px",
+        fontSize: 11.5,
+        fontWeight: 600,
+        cursor: "pointer",
+        fontFamily: "'Inter',sans-serif",
+    },
+    qrAlarmBadge: {
+        marginLeft: "auto",
+        fontSize: 10,
+        color: ALARM_RED_DARK,
+        background: "#FDECEB",
+        borderRadius: 20,
+        padding: "2px 8px",
+        fontFamily: "'IBM Plex Mono',monospace",
+    },
     viewDaysGroup: {
         display: "flex",
         gap: 4,
