@@ -593,10 +593,10 @@ useEffect(() => {
         .ps-statuschip:hover { box-shadow: 0 3px 10px rgba(0,61,27,0.35); transform: translateY(-1px); }
         @keyframes ps-alarm-dot { 0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(255,45,32,0.6); } 50% { opacity: 0.5; transform: scale(0.82); box-shadow: 0 0 0 5px rgba(255,45,32,0); } }
         .ps-alarm-dot { animation: ps-alarm-dot 0.9s ease-in-out infinite; }
-        @keyframes ps-alarmbar-bg { 0%, 100% { background: linear-gradient(90deg, #FFEAE7 0%, #FFF8F7 100%); } 50% { background: linear-gradient(90deg, #FFC2B8 0%, #FFEAE7 100%); } }
+        @keyframes ps-alarmbar-bg { 0%, 100% { background: linear-gradient(90deg, #ff2200 0%, #fd8370 100%); } 50% { background: linear-gradient(90deg, #FFC2B8 0%, #FFEAE7 100%); } }
         .ps-alarmbar { animation: ps-alarmbar-bg 1.3s ease-in-out infinite; }
         .ps-alarmchip:hover { box-shadow: 0 3px 10px rgba(214,24,10,0.35); transform: translateY(-1px); }
-        @keyframes ps-alarm-row-flash { 0%, 100% { background: #FFFFFF; } 50% { background: #FDEBEA; } }
+        @keyframes ps-alarm-row-flash { 0%, 100% { background: #ff0000; } 50% { background: #FDEBEA; } }
         .ps-alarm-row { animation: ps-alarm-row-flash 1.1s ease-in-out infinite; }
         .ps-alarmraisebtn:hover { background: ${ALARM_RED_DARK} !important; }
       `}</style>
@@ -1930,7 +1930,7 @@ const styles = {
         gap: 14,
         padding: "9px 18px",
         borderBottom: "1px solid #8FE0AF",
-        background: "linear-gradient(90deg, #DFF7E8 0%, #F2FCF6 100%)",
+        background: "linear-gradient(90deg, #02ce53 0%, #02ce53 100%)",
         flexWrap: "nowrap",
     },
     statusBarLabel: {
