@@ -542,12 +542,13 @@ useEffect(() => {
         return toolSummary.filter((t) => t.jobs.some((j) => j.id === toolsJobFilter));
     }, [toolSummary, toolsJobFilter]);
 
-    // jobs currently marked as running (from QR start/stop scans), paired with their resource
+    // jobs currently marked as running (from QR start/stop scans), paired with their resource.
+    // NC-imported jobs often start out unscheduled (no resourceId) - they can still be
+    // scanned start/stop from the QR Codes page, so don't require a resource to show here.
     const runningNow = useMemo(() => {
         return jobs
-            .filter((j) => j.isRunning && j.resourceId)
-            .map((j) => ({ job: j, resource: resources.find((r) => r.id === j.resourceId) || null }))
-            .filter((x) => x.resource);
+            .filter((j) => j.isRunning)
+            .map((j) => ({ job: j, resource: resources.find((r) => r.id === j.resourceId) || null }));
     }, [jobs, resources]);
 
     // resources with an active alarm (from QR alarm scans or manual trigger)
@@ -934,7 +935,7 @@ useEffect(() => {
                                                 }}
                                             >
                                                 <span className="ps-statusbar-dot" style={styles.statusChipDot} />
-                                                <span style={styles.statusChipResource}>{resource.name}</span>
+                                                <span style={styles.statusChipResource}>{resource ? resource.name : "unscheduled"}</span>
                                                 <span style={styles.statusChipSep}>·</span>
                                                 <span style={styles.statusChipJob}>{job.name}</span>
                                             </div>
@@ -1591,8 +1592,9 @@ useEffect(() => {
                                                 onClick={() => setSelectedJobId(job.id)}
                                                 style={{
                                                     ...styles.chip,
-                                                    borderLeft: `4px solid ${PRODUCTS[job.product]}`,
-                                                    boxShadow: selectedJobId === job.id ? `0 0 0 2px ${PRODUCTS[job.product]}55` : "0 1px 4px rgba(47,110,134,0.08)",
+                                                    borderLeft: `4px solid ${job.isRunning ? RUNNING_GREEN : PRODUCTS[job.product]}`,
+                                                    background: job.isRunning ? "#E4F5EE" : "#FFFFFF",
+                                                    boxShadow: selectedJobId === job.id ? `0 0 0 2px ${PRODUCTS[job.product]}55` : job.isRunning ? "0 0 0 1px #B7E3D3" : "0 1px 4px rgba(47,110,134,0.08)",
                                                     opacity: dimmed ? 0.28 : 1,
                                                     filter: dimmed ? "grayscale(0.4)" : "none",
                                                     transition: "opacity 0.15s ease",
@@ -1600,6 +1602,12 @@ useEffect(() => {
                                             >
                                                 <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, color: "#1B2226" }}>{job.name}</div>
                                                 <div style={{ fontSize: 10, color: "#7C8A93" }}>{job.product} · {job.duration}h</div>
+                                                {job.isRunning && (
+                                                    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9.5, fontWeight: 800, color: RUNNING_GREEN_DARK, letterSpacing: "0.05em", marginTop: 2 }}>
+                                                        <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 }} />
+                                                        RUNNING · not scheduled yet
+                                                    </div>
+                                                )}
                                                 {job.ncFileName && (
                                                     <div style={{ fontSize: 9.5, color: "#2F6E86", marginTop: 2, display: "flex", alignItems: "center", gap: 3 }}>
                                                         <Upload size={9} /> {job.ncSource === "comment" ? "from NC header" : "estimated"}
