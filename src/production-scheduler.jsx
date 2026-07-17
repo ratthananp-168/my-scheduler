@@ -111,6 +111,12 @@ const skipNextRealtimeRef = useRef(false);
 // triggers the other tab's echo in turn, forever, every ~1-2s. That loop can silently overwrite
 // a just-scanned change with a stale snapshot before you ever see it.
 const remoteUpdateRef = useRef(false);
+// mirrors of latest jobs/resources + which job/resource is currently open in the edit panel.
+// Used so an incoming realtime update never clobbers the row you're actively typing into
+// (previously: typing a name while a realtime event landed reset the field almost instantly).
+const jobsRef = useRef(jobs);
+const editingJobIdRef = useRef(null);
+const editingResourceIdRef = useRef(null);
 
 useEffect(() => {
     supabase
@@ -142,10 +148,37 @@ useEffect(() => {
                     return;
                 }
                 const incoming = payload.new?.data;
-                if (incoming) {
+                if (!incoming) return;
+
+                const editingJobId = editingJobIdRef.current;
+                const editingResourceId = editingResourceIdRef.current;
+                let keptLocalEdit = false;
+
+                if (incoming.jobs) {
+                    const localEditingJob = editingJobId ? jobsRef.current.find((j) => j.id === editingJobId) : null;
+                    if (localEditingJob) {
+                        // keep whatever is currently in the name/duration/etc fields for the job
+                        // being edited, but still accept the fresh data for every other job
+                        keptLocalEdit = true;
+                        setJobs(incoming.jobs.map((j) => (j.id === editingJobId ? localEditingJob : j)));
+                    } else {
+                        setJobs(incoming.jobs);
+                    }
+                }
+                if (incoming.resources) {
+                    const localEditingResource = editingResourceId ? resourcesRef.current.find((r) => r.id === editingResourceId) : null;
+                    if (localEditingResource) {
+                        keptLocalEdit = true;
+                        setResources(incoming.resources.map((r) => (r.id === editingResourceId ? localEditingResource : r)));
+                    } else {
+                        setResources(incoming.resources);
+                    }
+                }
+
+                // if we kept an in-progress edit, this update is NOT a pure remote sync -
+                // let the autosave effect below run normally so the edit still gets saved
+                if (!keptLocalEdit) {
                     remoteUpdateRef.current = true;
-                    if (incoming.jobs) setJobs(incoming.jobs);
-                    if (incoming.resources) setResources(incoming.resources);
                 }
             }
         )
@@ -205,6 +238,15 @@ useEffect(() => {
     useEffect(() => {
         resourcesRef.current = resources;
     }, [resources]);
+    useEffect(() => {
+        jobsRef.current = jobs;
+    }, [jobs]);
+    useEffect(() => {
+        editingJobIdRef.current = selectedJobId;
+    }, [selectedJobId]);
+    useEffect(() => {
+        editingResourceIdRef.current = selectedResourceId;
+    }, [selectedResourceId]);
 
     function fitWeekToView() {
         if (!gridScrollRef.current) return;
@@ -588,16 +630,32 @@ useEffect(() => {
           0% { left: -70%; }
           100% { left: 130%; }
         }
-        @keyframes ps-statusbar-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(0.85); } }
-        .ps-statusbar-dot { animation: ps-statusbar-dot 1.4s ease-in-out infinite; }
-        .ps-statuschip:hover { box-shadow: 0 3px 10px rgba(0,61,27,0.35); transform: translateY(-1px); }
-        @keyframes ps-alarm-dot { 0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(255,45,32,0.6); } 50% { opacity: 0.5; transform: scale(0.82); box-shadow: 0 0 0 5px rgba(255,45,32,0); } }
-        .ps-alarm-dot { animation: ps-alarm-dot 0.9s ease-in-out infinite; }
-        @keyframes ps-alarmbar-bg { 0%, 100% { background: linear-gradient(90deg, #ff2200 0%, #fd8370 100%); } 50% { background: linear-gradient(90deg, #FFC2B8 0%, #FFEAE7 100%); } }
-        .ps-alarmbar { animation: ps-alarmbar-bg 1.3s ease-in-out infinite; }
-        .ps-alarmchip:hover { box-shadow: 0 3px 10px rgba(214,24,10,0.35); transform: translateY(-1px); }
+        @keyframes ps-pulse-ring-green {
+          0%   { box-shadow: 0 0 0 0 rgba(0,168,80,0.45); }
+          70%  { box-shadow: 0 0 0 7px rgba(0,168,80,0); }
+          100% { box-shadow: 0 0 0 0 rgba(0,168,80,0); }
+        }
+        .ps-statusbar-dot { animation: ps-pulse-ring-green 1.8s ease-out infinite; }
+        .ps-statuschip:hover { box-shadow: 0 4px 12px rgba(0,40,15,0.28); transform: translateY(-1px); }
+        @keyframes ps-pulse-ring-red {
+          0%   { box-shadow: 0 0 0 0 rgba(224,54,40,0.45); }
+          70%  { box-shadow: 0 0 0 7px rgba(224,54,40,0); }
+          100% { box-shadow: 0 0 0 0 rgba(224,54,40,0); }
+        }
+        .ps-alarm-dot { animation: ps-pulse-ring-red 1.4s ease-out infinite; }
+        .ps-alarmchip:hover { box-shadow: 0 4px 12px rgba(60,10,5,0.28); transform: translateY(-1px); }
         @keyframes ps-alarm-row-flash { 0%, 100% { background: #ff0000; } 50% { background: #FDEBEA; } }
         .ps-alarm-row { animation: ps-alarm-row-flash 1.1s ease-in-out infinite; }
+        @keyframes ps-island-glow-green {
+          0%, 100% { box-shadow: 0 3px 8px rgba(0,168,68,0.28); transform: translateY(0); }
+          50%      { box-shadow: 0 4px 10px rgba(0,168,68,0.38); transform: translateY(-1px); }
+        }
+        .ps-island-green { animation: ps-island-glow-green 2.6s ease-in-out infinite; }
+        @keyframes ps-island-flash-red {
+          0%, 100% { background: linear-gradient(135deg, #FF3B2E 0%, #D6180A 100%); box-shadow: 0 3px 8px rgba(224,40,20,0.32); transform: translateY(0); }
+          50%      { background: linear-gradient(135deg, #FF6B5E 0%, #FF2D20 100%); box-shadow: 0 4px 10px rgba(224,40,20,0.45); transform: translateY(-1px); }
+        }
+        .ps-island-red { animation: ps-island-flash-red 0.9s ease-in-out infinite; }
         .ps-alarmraisebtn:hover { background: ${ALARM_RED_DARK} !important; }
       `}</style>
 
@@ -717,61 +775,65 @@ useEffect(() => {
                         </div>
                     </div>
 
-                    {activeAlarms.length > 0 && (
-                        <div className="ps-alarmbar" style={styles.alarmBar}>
-                            <div style={styles.alarmBarLabel}>
-                                <AlertOctagon size={13} color={ALARM_RED_DARK} strokeWidth={2.5} />
-                                แจ้งเตือน ({activeAlarms.length})
-                            </div>
-                            <div style={styles.statusBarStrip} className="ps-scroll">
-                                {activeAlarms.map((r) => (
-                                    <div key={r.id} className="ps-alarmchip" style={styles.alarmChip}>
-                                        <span className="ps-alarm-dot" style={styles.alarmChipDot} />
-                                        <span
-                                            style={styles.statusChipResource}
-                                            onClick={() => {
-                                                setActiveNav("schedule");
-                                                setSelectedResourceId(r.id);
-                                                setSelectedJobId(null);
-                                            }}
-                                        >
-                                            {r.name}
-                                        </span>
-                                        <span style={styles.statusChipSep}>·</span>
-                                        <span style={styles.alarmChipReason}>{ALARM_REASONS.find((a) => a.id === r.alarmReason)?.label || "แจ้งเตือน"}</span>
-                                        <button style={styles.alarmChipClear} onClick={() => clearAlarm(r.id)} title="clear alarm">
-                                            <X size={11} />
-                                        </button>
+                    {(runningNow.length > 0 || activeAlarms.length > 0) && (
+                        <div style={styles.islandRow}>
+                            {runningNow.length > 0 && (
+                                <div className="ps-island-green" style={styles.statusBar}>
+                                    <div style={styles.statusBarLabel}>
+                                        <Zap size={13} color="#FFFFFF" strokeWidth={2.5} />
+                                        กำลังทำงานอยู่ ({runningNow.length})
                                     </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
+                                    <div style={styles.statusBarStrip} className="ps-scroll">
+                                        {runningNow.map(({ job, resource }) => (
+                                            <div
+                                                key={job.id}
+                                                className="ps-statuschip"
+                                                style={styles.statusChip}
+                                                onClick={() => {
+                                                    setActiveNav("schedule");
+                                                    jumpToJob(job);
+                                                }}
+                                            >
+                                                <span className="ps-statusbar-dot" style={styles.statusChipDot} />
+                                                <span style={styles.statusChipResource}>{resource.name}</span>
+                                                <span style={styles.statusChipSep}>·</span>
+                                                <span style={styles.statusChipJob}>{job.name}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
 
-                    {runningNow.length > 0 && (
-                        <div style={styles.statusBar}>
-                            <div style={styles.statusBarLabel}>
-                                <Zap size={13} color={RUNNING_GREEN_DARK} strokeWidth={2.5} />
-                                กำลังทำงานอยู่ ({runningNow.length})
-                            </div>
-                            <div style={styles.statusBarStrip} className="ps-scroll">
-                                {runningNow.map(({ job, resource }) => (
-                                    <div
-                                        key={job.id}
-                                        className="ps-statuschip"
-                                        style={styles.statusChip}
-                                        onClick={() => {
-                                            setActiveNav("schedule");
-                                            jumpToJob(job);
-                                        }}
-                                    >
-                                        <span className="ps-statusbar-dot" style={styles.statusChipDot} />
-                                        <span style={styles.statusChipResource}>{resource.name}</span>
-                                        <span style={styles.statusChipSep}>·</span>
-                                        <span style={styles.statusChipJob}>{job.name}</span>
+                            {activeAlarms.length > 0 && (
+                                <div className="ps-island-red" style={styles.alarmBar}>
+                                    <div style={styles.alarmBarLabel}>
+                                        <AlertOctagon size={13} color="#FFFFFF" strokeWidth={2.5} />
+                                        แจ้งเตือน ({activeAlarms.length})
                                     </div>
-                                ))}
-                            </div>
+                                    <div style={styles.statusBarStrip} className="ps-scroll">
+                                        {activeAlarms.map((r) => (
+                                            <div key={r.id} className="ps-alarmchip" style={styles.alarmChip}>
+                                                <span className="ps-alarm-dot" style={styles.alarmChipDot} />
+                                                <span
+                                                    style={styles.statusChipResource}
+                                                    onClick={() => {
+                                                        setActiveNav("schedule");
+                                                        setSelectedResourceId(r.id);
+                                                        setSelectedJobId(null);
+                                                    }}
+                                                >
+                                                    {r.name}
+                                                </span>
+                                                <span style={styles.statusChipSep}>·</span>
+                                                <span style={styles.alarmChipReason}>{ALARM_REASONS.find((a) => a.id === r.alarmReason)?.label || "แจ้งเตือน"}</span>
+                                                <button style={styles.alarmChipClear} onClick={() => clearAlarm(r.id)} title="clear alarm">
+                                                    <X size={11} />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -1640,7 +1702,18 @@ useEffect(() => {
                             </div>
 
                             <label style={styles.fieldLabel}>job name</label>
-                            <input className="ps-input" value={selectedJob.name} onChange={(e) => updateJob(selectedJob.id, { name: e.target.value })} />
+                            <input
+                                className="ps-input"
+                                value={selectedJob.name}
+                                onChange={(e) => updateJob(selectedJob.id, { name: e.target.value })}
+                                autoComplete="off"
+                                autoCorrect="off"
+                                autoCapitalize="off"
+                                spellCheck="false"
+                                name="job-name-field"
+                                data-lpignore="true"
+                                data-1p-ignore="true"
+                            />
 
                             <label style={styles.fieldLabel}>product family</label>
                             <select className="ps-select" value={selectedJob.product} onChange={(e) => updateJob(selectedJob.id, { product: e.target.value })}>
@@ -1720,7 +1793,18 @@ useEffect(() => {
                             </div>
 
                             <label style={styles.fieldLabel}>resource name</label>
-                            <input className="ps-input" value={selectedResource.name} onChange={(e) => updateResource(selectedResource.id, { name: e.target.value })} />
+                            <input
+                                className="ps-input"
+                                value={selectedResource.name}
+                                onChange={(e) => updateResource(selectedResource.id, { name: e.target.value })}
+                                autoComplete="off"
+                                autoCorrect="off"
+                                autoCapitalize="off"
+                                spellCheck="false"
+                                name="resource-name-field"
+                                data-lpignore="true"
+                                data-1p-ignore="true"
+                            />
 
                             <label style={styles.fieldLabel}>type</label>
                             <input className="ps-input" value={selectedResource.type} onChange={(e) => updateResource(selectedResource.id, { type: e.target.value })} />
@@ -1924,87 +2008,119 @@ const styles = {
         padding: "4px 10px",
         fontFamily: "'IBM Plex Mono',monospace",
     },
+    islandRow: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        margin: "10px 18px 16px",
+        position: "sticky",
+        top: 0,
+        zIndex: 60,
+        flexWrap: "wrap",
+        // this row has no explicit width, so as a block-level div it stretches across the
+        // full app content area (a transparent hitbox) even though only the pills are visible.
+        // Being position:sticky with a higher z-index than the edit panel (50), that invisible
+        // area sat on top of the panel's inputs and silently ate every click before it reached
+        // them. pointer-events:none lets clicks fall through the empty space; the pills below
+        // opt back in with pointer-events:auto so they stay clickable.
+        pointerEvents: "none",
+    },
     statusBar: {
         display: "flex",
         alignItems: "center",
-        gap: 14,
-        padding: "9px 18px",
-        borderBottom: "1px solid #8FE0AF",
-        background: "linear-gradient(90deg, #02ce53 0%, #02ce53 100%)",
+        gap: 8,
+        width: "fit-content",
+        maxWidth: "calc(50% - 5px)",
+        padding: "6px 10px",
+        borderRadius: 20,
+        background: "linear-gradient(135deg, #00D65E 0%, #00A844 100%)",
         flexWrap: "nowrap",
+        pointerEvents: "auto",
     },
     statusBarLabel: {
         display: "flex",
         alignItems: "center",
-        gap: 6,
-        fontSize: 11.5,
+        gap: 5,
+        fontSize: 10.5,
         fontWeight: 700,
-        color: RUNNING_GREEN_DARK,
+        color: "#FFFFFF",
         fontFamily: "'Inter',sans-serif",
         whiteSpace: "nowrap",
         flexShrink: 0,
+        background: "rgba(255,255,255,0.2)",
+        padding: "5px 9px 5px 7px",
+        borderRadius: 16,
     },
     statusBarStrip: {
         display: "flex",
         alignItems: "center",
-        gap: 8,
+        gap: 6,
         overflowX: "auto",
-        flex: 1,
         minWidth: 0,
         paddingBottom: 1,
     },
     statusChip: {
         display: "flex",
         alignItems: "center",
-        gap: 6,
+        gap: 5,
         flexShrink: 0,
         background: "#FFFFFF",
-        border: `1px solid ${RUNNING_GREEN}66`,
-        borderRadius: 20,
-        padding: "5px 11px",
+        border: "none",
+        borderRadius: 16,
+        padding: "4px 9px",
         cursor: "pointer",
+        boxShadow: "0 2px 6px rgba(0,40,15,0.2)",
         transition: "box-shadow 0.15s ease, transform 0.15s ease",
     },
-    statusChipDot: { width: 7, height: 7, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 },
+    statusChipDot: { width: 6, height: 6, borderRadius: "50%", background: "#00A844", flexShrink: 0 },
     statusChipResource: { fontSize: 11.5, fontWeight: 700, color: "#1B2226", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap", cursor: "pointer" },
     statusChipSep: { color: "#B7C4C9", fontSize: 11 },
     statusChipJob: { fontSize: 11, color: "#5B6B72", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
     alarmBar: {
         display: "flex",
         alignItems: "center",
-        gap: 14,
-        padding: "9px 18px",
-        borderBottom: "1px solid #FFAFA6",
+        gap: 8,
+        width: "fit-content",
+        maxWidth: "calc(50% - 5px)",
+        marginLeft: "auto",
+        padding: "6px 10px",
+        borderRadius: 20,
+        background: "linear-gradient(135deg, #FF3B2E 0%, #D6180A 100%)",
         flexWrap: "nowrap",
+        pointerEvents: "auto",
     },
     alarmBarLabel: {
         display: "flex",
         alignItems: "center",
-        gap: 6,
-        fontSize: 11.5,
+        gap: 5,
+        fontSize: 10.5,
         fontWeight: 700,
-        color: ALARM_RED_DARK,
+        color: "#FFFFFF",
         fontFamily: "'Inter',sans-serif",
         whiteSpace: "nowrap",
         flexShrink: 0,
+        background: "rgba(255,255,255,0.2)",
+        padding: "5px 9px 5px 7px",
+        borderRadius: 16,
     },
     alarmChip: {
         display: "flex",
         alignItems: "center",
-        gap: 6,
+        gap: 5,
         flexShrink: 0,
         background: "#FFFFFF",
-        border: `1px solid ${ALARM_RED}66`,
-        borderRadius: 20,
-        padding: "5px 6px 5px 11px",
+        border: "none",
+        borderRadius: 16,
+        padding: "4px 5px 4px 9px",
+        boxShadow: "0 2px 6px rgba(60,10,5,0.2)",
         transition: "box-shadow 0.15s ease, transform 0.15s ease",
     },
-    alarmChipDot: { width: 7, height: 7, borderRadius: "50%", background: ALARM_RED, flexShrink: 0 },
+    alarmChipDot: { width: 6, height: 6, borderRadius: "50%", background: "#FF2D20", flexShrink: 0 },
     alarmChipReason: { fontSize: 11, color: "#8A4842", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
     alarmChipClear: {
         border: "none",
-        background: "#FDECEB",
-        color: ALARM_RED_DARK,
+        background: "#FCEAE8",
+        color: "#B23218",
         borderRadius: "50%",
         width: 18,
         height: 18,
@@ -2015,6 +2131,7 @@ const styles = {
         flexShrink: 0,
         marginLeft: 2,
         padding: 0,
+        transition: "background 0.15s ease",
     },
     alarmActiveNote: {
         display: "flex",
