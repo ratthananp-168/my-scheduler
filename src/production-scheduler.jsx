@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
-import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, ChevronLeft, ChevronRight, QrCode, Play, Square, Zap } from "lucide-react";
+import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, ChevronLeft, ChevronRight, QrCode, Play, Square, Zap, Upload, Wrench, Clock } from "lucide-react";
+import { parseNCProgram, jobNameFromFilename } from "./utils/ncParser";
 
 const NAV_ITEMS = [
     { id: "home", label: "Home", Icon: HomeIcon },
     { id: "schedule", label: "Schedule", Icon: CalendarDays },
     { id: "analytics", label: "Analytics", Icon: BarChart3 },
+    { id: "tools", label: "Tools", Icon: Wrench },
     { id: "qrcodes", label: "QR Codes", Icon: QrCode },
 ];
 
@@ -25,6 +27,15 @@ const JOB_RUNNING_GREEN = "#00C853";
 
 const ALARM_RED = "#FF2D20";
 const ALARM_RED_DARK = "#D6180A";
+
+const DONE_BLUE = "#2F6E86";
+const OVERDUE_AMBER = "#B45309";
+const OVERDUE_AMBER_BORDER = "#E8A33D";
+const OVERDUE_AMBER_BG = "#FDF3E4";
+
+// reference tool life used to gauge wear-out risk on the Tools page - every tool is
+// assumed to be good for this many actual cutting hours before it should be replaced
+const TOOL_LIFE_HOURS = 2;
 
 const ALARM_REASONS = [
     { id: "breakdown", label: "เครื่องขัดข้อง" },
@@ -102,6 +113,11 @@ function toDateInputValue(date) {
 export default function ProductionScheduler() {
    const [jobs, setJobs] = useState(cloneJobs);
 const [resources, setResources] = useState(cloneResources);
+// persistent, append-only ledger of actual tool usage hours, keyed by tool identity.
+// Unlike job.tools[].actualHours (which lives on the job and disappears if the job is
+// deleted), this survives job deletion so the Tools page keeps an accurate lifetime total.
+// Written to by ScanAction.jsx on every STOP scan.
+const [toolHistory, setToolHistory] = useState([]);
 const [loaded, setLoaded] = useState(false);
 const skipNextRealtimeRef = useRef(false);
 // true when jobs/resources were just set FROM Supabase (initial load or a realtime event from
@@ -129,6 +145,7 @@ useEffect(() => {
             if (!error && data?.data && Object.keys(data.data).length > 0) {
                 setJobs(data.data.jobs || cloneJobs());
                 setResources(data.data.resources || cloneResources());
+                setToolHistory(data.data.toolHistory || []);
             }
             setLoaded(true);
         });
@@ -174,6 +191,9 @@ useEffect(() => {
                         setResources(incoming.resources);
                     }
                 }
+                if (incoming.toolHistory) {
+                    setToolHistory(incoming.toolHistory);
+                }
 
                 // if we kept an in-progress edit, this update is NOT a pure remote sync -
                 // let the autosave effect below run normally so the edit still gets saved
@@ -201,12 +221,12 @@ useEffect(() => {
         skipNextRealtimeRef.current = true;
         supabase
             .from("schedule_state")
-            .update({ data: { jobs, resources }, updated_at: new Date().toISOString() })
+            .update({ data: { jobs, resources, toolHistory }, updated_at: new Date().toISOString() })
             .eq("id", 1)
             .then();
     }, 800);
     return () => clearTimeout(timer);
-}, [jobs, resources, loaded]);
+}, [jobs, resources, toolHistory, loaded]);
     const [hourWidth, setHourWidth] = useState(22);
     const [selectedJobId, setSelectedJobId] = useState(null);
     const [selectedResourceId, setSelectedResourceId] = useState(null);
@@ -221,6 +241,63 @@ useEffect(() => {
     const [filterFromDate, setFilterFromDate] = useState("");
     const [filterToDate, setFilterToDate] = useState("");
     const [pendingAlarmReason, setPendingAlarmReason] = useState(ALARM_REASONS[0].id);
+    const [selectedToolKey, setSelectedToolKey] = useState(null);
+    const [toolsJobFilter, setToolsJobFilter] = useState("all");
+    const [nowTick, setNowTick] = useState(Date.now());
+    useEffect(() => {
+        const t = setInterval(() => setNowTick(Date.now()), 30000);
+        return () => clearInterval(t);
+    }, []);
+    const [isDraggingNC, setIsDraggingNC] = useState(false);
+    const [ncImportError, setNcImportError] = useState("");
+    const ncFileInputRef = useRef(null);
+
+    function importNCFiles(fileList) {
+        const files = Array.from(fileList || []);
+        if (files.length === 0) return;
+        setNcImportError("");
+
+        files.forEach((file) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    const { hours, source, tools } = parseNCProgram(String(reader.result || ""));
+                    const duration = Math.max(0.25, Math.round(hours * 4) / 4); // round to nearest 15 min
+                    const id = "nc-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+                    const newJob = {
+                        id,
+                        name: jobNameFromFilename(file.name),
+                        product: Object.keys(PRODUCTS)[0],
+                        resourceId: null,
+                        startHour: 0,
+                        duration,
+                        locked: false,
+                        ncSource: source,
+                        ncFileName: file.name,
+                        tools,
+                    };
+                    setJobs((js) => [...js, newJob]);
+                    setSelectedJobId(id);
+                    setSelectedResourceId(null);
+                } catch {
+                    setNcImportError(`อ่านไฟล์ ${file.name} ไม่สำเร็จ`);
+                }
+            };
+            reader.onerror = () => setNcImportError(`อ่านไฟล์ ${file.name} ไม่สำเร็จ`);
+            reader.readAsText(file);
+        });
+    }
+
+    function handleNCBrowseChange(e) {
+        importNCFiles(e.target.files);
+        e.target.value = "";
+    }
+
+    function handleNCDrop(e) {
+        e.preventDefault();
+        setIsDraggingNC(false);
+        importNCFiles(e.dataTransfer.files);
+    }
 
     const DAYS = viewDays;
     const TOTAL_HOURS = DAYS * 24;
@@ -406,6 +483,65 @@ useEffect(() => {
         return { avgUtil, busiest, totalConflictJobs, bottlenecks };
     }, [resources, utilization, resourceConflictCounts, conflictIds]);
 
+    // aggregate tool usage for the Tools summary page.
+    // actualHours (the durable total) comes from toolHistory, which ScanAction.jsx updates
+    // on every STOP scan and which is NOT tied to any single job - so it survives job
+    // deletion. estHours/liveHours/job-list still come from whichever jobs currently exist.
+    const toolSummary = useMemo(() => {
+        const map = new Map();
+
+        toolHistory.forEach((h) => {
+            const key = (h.number || "?") + "::" + h.name;
+            map.set(key, {
+                number: h.number,
+                name: h.name,
+                estHours: 0,
+                actualHours: h.actualHours || 0,
+                liveHours: 0,
+                opCount: 0,
+                jobs: [],
+                historicalJobNames: h.jobNames || [],
+            });
+        });
+
+        jobs.forEach((job) => {
+            const jobTools = job.tools || [];
+            const estTotal = jobTools.reduce((s, t) => s + (t.hours || 0), 0);
+            let liveElapsed = 0;
+            if (job.isRunning && job.runStartedAt) {
+                liveElapsed = Math.max(0, (nowTick - new Date(job.runStartedAt).getTime()) / 3600000);
+            }
+            jobTools.forEach((t) => {
+                const key = (t.number || "?") + "::" + t.name;
+                if (!map.has(key)) {
+                    map.set(key, { number: t.number, name: t.name, estHours: 0, actualHours: 0, liveHours: 0, opCount: 0, jobs: [], historicalJobNames: [] });
+                }
+                const entry = map.get(key);
+                const share = estTotal > 0 ? (t.hours || 0) / estTotal : jobTools.length ? 1 / jobTools.length : 0;
+                const jobLiveHours = liveElapsed * share;
+                entry.estHours += t.hours || 0;
+                entry.liveHours += jobLiveHours;
+                entry.opCount += t.opCount || 0;
+                entry.jobs.push({ id: job.id, name: job.name, estHours: t.hours || 0, actualHours: t.actualHours || 0, liveHours: jobLiveHours, isRunning: job.isRunning });
+            });
+        });
+
+        return Array.from(map.values()).sort((a, b) => (b.actualHours + b.liveHours) - (a.actualHours + a.liveHours));
+    }, [jobs, toolHistory, nowTick]);
+
+    // jobs worth offering in the Tools page "filter by job" dropdown - only ones that
+    // actually carry a tool breakdown (i.e. were imported from an NC file)
+    const toolsJobOptions = useMemo(() => {
+        return jobs.filter((j) => j.tools && j.tools.length > 0).slice().sort((a, b) => a.name.localeCompare(b.name));
+    }, [jobs]);
+
+    // narrow the Tools page down to just the tools used by one job when a filter is picked -
+    // otherwise every tool across every job piles up in one long list
+    const visibleToolSummary = useMemo(() => {
+        if (toolsJobFilter === "all") return toolSummary;
+        return toolSummary.filter((t) => t.jobs.some((j) => j.id === toolsJobFilter));
+    }, [toolSummary, toolsJobFilter]);
+
     // jobs currently marked as running (from QR start/stop scans), paired with their resource
     const runningNow = useMemo(() => {
         return jobs
@@ -579,6 +715,8 @@ useEffect(() => {
 
     const selectedJob = jobs.find((j) => j.id === selectedJobId) || null;
     const selectedResource = resources.find((r) => r.id === selectedResourceId) || null;
+    const toolKey = (t) => (t.number || "?") + "::" + t.name;
+    const selectedTool = (selectedToolKey ? visibleToolSummary.find((t) => toolKey(t) === selectedToolKey) : null) || visibleToolSummary[0] || null;
     const conflictCount = conflictIds.size;
 
     return (
@@ -607,6 +745,7 @@ useEffect(() => {
         .ps-sidebar:hover .ps-navlabel { opacity: 1; }
         .ps-sidebar:hover .ps-promo { opacity: 1; pointer-events: auto; }
         .ps-searchitem:hover { background: #EEF2F3 !important; }
+        .ps-tool-sidebar-item:hover { background: #F2F6F7 !important; }
         @keyframes ps-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(0,200,83,0.55); } 50% { box-shadow: 0 0 0 5px rgba(0,200,83,0); } }
         .ps-running-dot { animation: ps-pulse 1.4s ease-in-out infinite; }
         @keyframes ps-job-glow { 0%, 100% { box-shadow: 0 0 0 2px rgba(0,200,83,0.55), 0 3px 12px rgba(0,200,83,0.35); } 50% { box-shadow: 0 0 0 6px rgba(0,200,83,0.16), 0 3px 12px rgba(0,200,83,0.35); } }
@@ -710,7 +849,7 @@ useEffect(() => {
                     <div style={styles.toolbar}>
                         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
                             <span style={styles.appTitle}>
-                                {activeNav === "home" ? "Home" : activeNav === "analytics" ? "Analytics" : activeNav === "qrcodes" ? "QR Codes" : "Production Scheduler"}
+                                {activeNav === "home" ? "Home" : activeNav === "analytics" ? "Analytics" : activeNav === "tools" ? "Tools" : activeNav === "qrcodes" ? "QR Codes" : "Production Scheduler"}
                             </span>
                             <span style={styles.appSub}>from {baseDate.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} · {DAYS} day{DAYS !== 1 ? "s" : ""} shown</span>
                         </div>
@@ -1110,6 +1249,15 @@ useEffect(() => {
                                         {meta.label}
                                     </div>
                                 ))}
+                                <div style={styles.legendDivider} />
+                                <div style={styles.legendItem}>
+                                    <CheckCircle2 size={12} color={DONE_BLUE} style={{ marginRight: 4 }} />
+                                    Done
+                                </div>
+                                <div style={styles.legendItem}>
+                                    <Clock size={12} color={OVERDUE_AMBER} style={{ marginRight: 4 }} />
+                                    Overdue
+                                </div>
                             </div>
 
                             <div
@@ -1281,6 +1429,9 @@ useEffect(() => {
                                                             const selected = selectedJobId === job.id;
                                                             const dimmed = isFilterActive && !jobMatchesFilter(job);
                                                             const blocked = isJobBlocked(job);
+                                                            // scheduled window is over but the job never got scanned start/stop
+                                                            const isDone = !!job.completed;
+                                                            const isOverdue = !isDone && !job.isRunning && !blocked && job.startHour + job.duration < nowHour;
                                                             return (
                                                                 <div
                                                                     key={job.id}
@@ -1292,10 +1443,10 @@ useEffect(() => {
                                                                         width: Math.max(6, job.duration * hourWidth - 2),
                                                                         top: 7,
                                                                         height: ROW_HEIGHT - 14,
-                                                                        background: blocked ? "#FBE4E2" : job.isRunning ? JOB_RUNNING_GREEN : job.locked ? `${color}22` : "#FFFFFF",
-                                                                        border: blocked ? `1px solid ${ALARM_RED}99` : isConflict ? "1px solid #F0625B" : job.locked ? `1px solid ${color}77` : "1px solid #E4EAEC",
+                                                                        background: blocked ? "#FBE4E2" : job.isRunning ? JOB_RUNNING_GREEN : isDone ? "#EAF2F4" : isOverdue ? OVERDUE_AMBER_BG : job.locked ? `${color}22` : "#FFFFFF",
+                                                                        border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_AMBER_BORDER}` : isConflict ? "1px solid #F0625B" : isDone ? `1px solid ${DONE_BLUE}55` : job.locked ? `1px solid ${color}77` : "1px solid #E4EAEC",
                                                                         borderLeftWidth: 4,
-                                                                        borderLeftColor: blocked ? ALARM_RED : color,
+                                                                        borderLeftColor: blocked ? ALARM_RED : isOverdue ? OVERDUE_AMBER_BORDER : isDone ? DONE_BLUE : color,
                                                                         boxShadow: selected ? `0 0 0 2px ${color}55, 0 4px 10px rgba(47,110,134,0.12)` : "0 1px 4px rgba(47,110,134,0.08)",
                                                                         borderRadius: 12,
                                                                         cursor: blocked ? "not-allowed" : job.locked ? "pointer" : "grab",
@@ -1333,6 +1484,10 @@ useEffect(() => {
                                                                         >
                                                                             {blocked ? (
                                                                                 <AlertOctagon size={9} color={ALARM_RED_DARK} strokeWidth={2.5} />
+                                                                            ) : isDone ? (
+                                                                                <CheckCircle2 size={9} color={DONE_BLUE} strokeWidth={2.5} />
+                                                                            ) : isOverdue ? (
+                                                                                <Clock size={9} color={OVERDUE_AMBER} strokeWidth={2.5} />
                                                                             ) : (
                                                                                 job.locked && <Lock size={9} color={job.isRunning ? "#FFFFFF" : color} strokeWidth={2.5} />
                                                                             )}
@@ -1346,6 +1501,14 @@ useEffect(() => {
                                                                             <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9.5, fontWeight: 800, color: "#FFFFFF", letterSpacing: "0.05em", whiteSpace: "nowrap", textShadow: "0 1px 2px rgba(0,60,20,0.35)" }}>
                                                                                 <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "#FFFFFF", flexShrink: 0 }} />
                                                                                 RUNNING
+                                                                            </div>
+                                                                        ) : isDone ? (
+                                                                            <div style={{ fontSize: 9.5, fontWeight: 800, color: DONE_BLUE, letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
+                                                                                DONE
+                                                                            </div>
+                                                                        ) : isOverdue ? (
+                                                                            <div style={{ fontSize: 9.5, fontWeight: 800, color: OVERDUE_AMBER, letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
+                                                                                OVERDUE
                                                                             </div>
                                                                         ) : (
                                                                             <div style={{ fontSize: 10, color: "#7C8A93", whiteSpace: "nowrap" }}>{job.duration}h</div>
@@ -1368,13 +1531,55 @@ useEffect(() => {
                                 </div>
                             </div>
 
-                            <div ref={poolRef} style={styles.pool}>
-                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                                    <div style={styles.poolLabel}>unscheduled ({poolJobs.length})</div>
-                                    <button className="ps-addbtn" style={styles.addJobBtn} onClick={addJob}>
-                                        + new job
-                                    </button>
+                            <div
+                                ref={poolRef}
+                                style={{
+                                    ...styles.pool,
+                                    border: isDraggingNC ? "2px dashed #2F6E86" : "2px dashed transparent",
+                                    background: isDraggingNC ? "#EAF2F4" : styles.pool.background,
+                                    transition: "background 0.12s ease, border-color 0.12s ease",
+                                    boxSizing: "border-box",
+                                }}
+                                onDragOver={(e) => {
+                                    if (Array.from(e.dataTransfer.items || []).some((it) => it.kind === "file")) {
+                                        e.preventDefault();
+                                        setIsDraggingNC(true);
+                                    }
+                                }}
+                                onDragLeave={(e) => {
+                                    if (e.currentTarget.contains(e.relatedTarget)) return;
+                                    setIsDraggingNC(false);
+                                }}
+                                onDrop={handleNCDrop}
+                            >
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+                                    <div style={styles.poolLabel}>
+                                        unscheduled ({poolJobs.length})
+                                        {isDraggingNC && <span style={{ marginLeft: 8, color: "#2F6E86", textTransform: "none" }}>วางไฟล์ NC ที่นี่</span>}
+                                    </div>
+                                    <div style={{ display: "flex", gap: 8 }}>
+                                        <input
+                                            ref={ncFileInputRef}
+                                            type="file"
+                                            accept=".nc,.tap,.cnc,.gcode,.nc1,.mpf,.eia,.txt"
+                                            multiple
+                                            style={{ display: "none" }}
+                                            onChange={handleNCBrowseChange}
+                                        />
+                                        <button
+                                            className="ps-addbtn"
+                                            style={{ ...styles.addJobBtn, background: "#33424A", border: "1px solid #33424A", display: "flex", alignItems: "center", gap: 5 }}
+                                            onClick={() => ncFileInputRef.current?.click()}
+                                            title="เลือกไฟล์ NC เพื่อสร้างงานพร้อมเวลาโดยประมาณ"
+                                        >
+                                            <Upload size={12} /> import NC
+                                        </button>
+                                        <button className="ps-addbtn" style={styles.addJobBtn} onClick={addJob}>
+                                            + new job
+                                        </button>
+                                    </div>
                                 </div>
+                                {ncImportError && <div style={{ fontSize: 11, color: "#C4372E", marginTop: 4 }}>{ncImportError}</div>}
                                 <div style={styles.poolStrip}>
                                     {poolJobs.map((job) => {
                                         const dimmed = isFilterActive && !jobMatchesFilter(job);
@@ -1395,6 +1600,18 @@ useEffect(() => {
                                             >
                                                 <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, color: "#1B2226" }}>{job.name}</div>
                                                 <div style={{ fontSize: 10, color: "#7C8A93" }}>{job.product} · {job.duration}h</div>
+                                                {job.ncFileName && (
+                                                    <div style={{ fontSize: 9.5, color: "#2F6E86", marginTop: 2, display: "flex", alignItems: "center", gap: 3 }}>
+                                                        <Upload size={9} /> {job.ncSource === "comment" ? "from NC header" : "estimated"}
+                                                    </div>
+                                                )}
+                                                {job.tools && job.tools.length > 0 && (
+                                                    <div style={{ fontSize: 9.5, color: "#5B6B72", marginTop: 2, display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap" }}>
+                                                        <Wrench size={9} />
+                                                        {job.tools[0].name}
+                                                        {job.tools.length > 1 && ` +${job.tools.length - 1}`}
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })}
@@ -1572,6 +1789,267 @@ useEffect(() => {
                                         </div>
                                     )}
                                 </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeNav === "tools" && (
+                        <div className="ps-scroll" style={styles.analyticsWrap}>
+                            <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+                                {toolSummary.length === 0 ? (
+                                    <div style={styles.bottleneckEmpty}>
+                                        <Wrench size={16} color="#7C8A93" />
+                                        No tool data yet — import an NC file with TOOL comments to see a summary here
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+                                            <label style={{ fontSize: 11.5, color: "#7C8A93", flexShrink: 0 }}>Filter by job</label>
+                                            <select
+                                                className="ps-select"
+                                                style={{ width: "auto", minWidth: 220 }}
+                                                value={toolsJobFilter}
+                                                onChange={(e) => {
+                                                    setToolsJobFilter(e.target.value);
+                                                    setSelectedToolKey(null);
+                                                }}
+                                            >
+                                                <option value="all">All jobs ({toolSummary.length} tools)</option>
+                                                {toolsJobOptions.map((j) => (
+                                                    <option key={j.id} value={j.id}>{j.name} ({(j.tools || []).length} tools)</option>
+                                                ))}
+                                            </select>
+                                            {toolsJobFilter !== "all" && (
+                                                <button
+                                                    className="ps-zoombtn"
+                                                    style={{ ...styles.zoomBtn, width: "auto", padding: "0 10px" }}
+                                                    onClick={() => {
+                                                        setToolsJobFilter("all");
+                                                        setSelectedToolKey(null);
+                                                    }}
+                                                >
+                                                    clear filter
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {visibleToolSummary.length === 0 ? (
+                                            <div style={styles.bottleneckEmpty}>No tools found for this job</div>
+                                        ) : (
+                                        <>
+                                        <div style={styles.toolsLayout}>
+                                            <div style={styles.toolsSidebar} className="ps-scroll">
+                                                {visibleToolSummary.map((t) => {
+                                                    const key = toolKey(t);
+                                                    const active = selectedTool && toolKey(selectedTool) === key;
+                                                    const usedHours = t.actualHours + t.liveHours;
+                                                    const lifePct = Math.min(100, (usedHours / TOOL_LIFE_HOURS) * 100);
+                                                    const lifeOver = usedHours > TOOL_LIFE_HOURS;
+                                                    return (
+                                                        <div
+                                                            key={key}
+                                                            className="ps-tool-sidebar-item"
+                                                            onClick={() => setSelectedToolKey(key)}
+                                                            style={{
+                                                                ...styles.toolsSidebarItem,
+                                                                background: active ? "#EAF2F4" : "transparent",
+                                                                borderLeft: active ? `3px solid ${DONE_BLUE}` : "3px solid transparent",
+                                                            }}
+                                                        >
+                                                            <Wrench size={13} color={active ? DONE_BLUE : "#7C8A93"} style={{ flexShrink: 0 }} />
+                                                            <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, gap: 3 }}>
+                                                                <span style={{ ...styles.toolsSidebarName, color: active ? "#1B2226" : "#33424A" }}>
+                                                                    {t.number ? `T${t.number} · ` : ""}{t.name}
+                                                                </span>
+                                                                <span style={styles.toolsSidebarSub}>{t.jobs.length} job{t.jobs.length !== 1 ? "s" : ""}</span>
+                                                                <div style={{ height: 4, background: "#E7EDEF", borderRadius: 3, overflow: "hidden" }}>
+                                                                    <div style={{ height: "100%", width: `${lifePct}%`, borderRadius: 3, background: lifeOver ? "#F0625B" : lifePct > 75 ? "#E8A33D" : "#17A2A0" }} />
+                                                                </div>
+                                                            </div>
+                                                            {t.liveHours > 0 && <span className="ps-running-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 }} />}
+                                                            <span style={{ ...styles.toolsSidebarHours, color: lifeOver ? "#C4372E" : "#1B2226" }}>{usedHours.toFixed(1)}h</span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+
+                                            <div style={styles.toolsDetail}>
+                                                {selectedTool ? (
+                                                    (() => {
+                                                        const t = selectedTool;
+                                                        const usedHours = t.actualHours + t.liveHours;
+                                                        const pct = t.estHours > 0 ? Math.min(100, (usedHours / t.estHours) * 100) : 0;
+                                                        const overEstimate = t.estHours > 0 && usedHours > t.estHours;
+                                                        const lifePct = Math.min(100, (usedHours / TOOL_LIFE_HOURS) * 100);
+                                                        const lifeOver = usedHours > TOOL_LIFE_HOURS;
+                                                        return (
+                                                            <>
+                                                                <div style={styles.qrCardHeader}>
+                                                                    <Wrench size={16} color="#2F6E86" />
+                                                                    <span style={{ ...styles.qrJobName, fontSize: 15 }}>{t.number ? `T${t.number} · ` : ""}{t.name}</span>
+                                                                    {t.liveHours > 0 && (
+                                                                        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: RUNNING_GREEN }}>
+                                                                            <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: RUNNING_GREEN }} />
+                                                                            Running now
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+
+                                                                <div style={styles.analyticsStatsRow}>
+                                                                    <div style={styles.analyticsStat}>
+                                                                        <span style={styles.analyticsStatValue}>{t.estHours.toFixed(1)}h</span>
+                                                                        <span style={styles.analyticsStatLabel}>Estimated</span>
+                                                                    </div>
+                                                                    <div style={styles.analyticsStat}>
+                                                                        <span style={{ ...styles.analyticsStatValue, color: overEstimate ? "#C4372E" : "#1B2226" }}>{usedHours.toFixed(1)}h</span>
+                                                                        <span style={styles.analyticsStatLabel}>Actual used</span>
+                                                                    </div>
+                                                                    <div style={styles.analyticsStat}>
+                                                                        <span style={styles.analyticsStatValue}>{t.jobs.length}</span>
+                                                                        <span style={styles.analyticsStatLabel}>Active jobs</span>
+                                                                    </div>
+                                                                </div>
+
+                                                                <label style={styles.fieldLabel}>vs estimate</label>
+                                                                <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 14px" }}>
+                                                                    <div style={{ flex: 1, height: 8, background: "#E7EDEF", borderRadius: 5, overflow: "hidden" }}>
+                                                                        <div
+                                                                            style={{
+                                                                                height: "100%",
+                                                                                width: `${pct}%`,
+                                                                                borderRadius: 5,
+                                                                                background: overEstimate ? "#F0625B" : t.liveHours > 0 ? RUNNING_GREEN : "#17A2A0",
+                                                                            }}
+                                                                        />
+                                                                    </div>
+                                                                    <span style={{ fontSize: 11, color: "#7C8A93", flexShrink: 0 }}>{pct.toFixed(0)}%</span>
+                                                                </div>
+
+                                                                <label style={styles.fieldLabel}>tool life used (of {TOOL_LIFE_HOURS.toFixed(1)}h reference)</label>
+                                                                <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 16px" }}>
+                                                                    <div style={{ flex: 1, height: 8, background: "#E7EDEF", borderRadius: 5, overflow: "hidden" }}>
+                                                                        <div
+                                                                            style={{
+                                                                                height: "100%",
+                                                                                width: `${lifePct}%`,
+                                                                                borderRadius: 5,
+                                                                                background: lifeOver ? "#F0625B" : lifePct > 75 ? "#E8A33D" : "#17A2A0",
+                                                                            }}
+                                                                        />
+                                                                    </div>
+                                                                    <span style={{ fontSize: 11, color: lifeOver ? "#C4372E" : "#7C8A93", fontWeight: lifeOver ? 700 : 400, flexShrink: 0 }}>
+                                                                        {lifePct.toFixed(0)}%{lifeOver ? " — replace" : ""}
+                                                                    </span>
+                                                                </div>
+
+                                                                <label style={styles.fieldLabel}>jobs using this tool</label>
+                                                                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                                                    {t.jobs.map((j, i) => (
+                                                                        <div
+                                                                            key={j.id + i}
+                                                                            style={styles.toolRow}
+                                                                            onClick={() => {
+                                                                                setActiveNav("schedule");
+                                                                                const found = jobs.find((jj) => jj.id === j.id);
+                                                                                if (found) jumpToJob(found);
+                                                                            }}
+                                                                        >
+                                                                            <span style={{ ...styles.legendDot, background: PRODUCTS[jobs.find((jj) => jj.id === j.id)?.product] || "#7C8A93" }} />
+                                                                            <span style={styles.toolRowName}>{j.name}</span>
+                                                                            <span style={styles.toolRowHours}>
+                                                                                {(j.actualHours + j.liveHours) >= 0.1 ? `${(j.actualHours + j.liveHours).toFixed(1)}h` : "<0.1h"} / {j.estHours.toFixed(1)}h
+                                                                            </span>
+                                                                        </div>
+                                                                    ))}
+                                                                    {t.jobs.length === 0 && t.historicalJobNames.length > 0 && (
+                                                                        <div style={{ fontSize: 10.5, color: "#7C8A93", padding: "4px 8px" }}>
+                                                                            Previously used in (deleted): {t.historicalJobNames.join(", ")}
+                                                                        </div>
+                                                                    )}
+                                                                    {t.jobs.length === 0 && t.historicalJobNames.length === 0 && (
+                                                                        <div style={{ fontSize: 10.5, color: "#7C8A93", padding: "4px 8px" }}>No jobs currently use this tool</div>
+                                                                    )}
+                                                                </div>
+                                                            </>
+                                                        );
+                                                    })()
+                                                ) : (
+                                                    <div style={styles.bottleneckEmpty}>Select a tool on the left to see details</div>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div style={styles.toolsSummarySection}>
+                                            <div style={styles.analyticsCardHeader}>
+                                                <BarChart3 size={15} color="#2F6E86" />
+                                                <span style={styles.analyticsCardTitle}>Overview — All Tools</span>
+                                            </div>
+                                            <div style={styles.analyticsStatsRow}>
+                                                <div style={styles.analyticsStat}>
+                                                    <span style={styles.analyticsStatValue}>{visibleToolSummary.length}</span>
+                                                    <span style={styles.analyticsStatLabel}>distinct tools</span>
+                                                </div>
+                                                <div style={styles.analyticsStat}>
+                                                    <span style={styles.analyticsStatValue}>{visibleToolSummary.reduce((s, t) => s + t.jobs.length, 0)}</span>
+                                                    <span style={styles.analyticsStatLabel}>tool-job assignments</span>
+                                                </div>
+                                                <div style={styles.analyticsStat}>
+                                                    <span style={styles.analyticsStatValue}>
+                                                        {visibleToolSummary.reduce((s, t) => s + t.actualHours + t.liveHours, 0).toFixed(1)}h
+                                                    </span>
+                                                    <span style={styles.analyticsStatLabel}>total actual hours used</span>
+                                                </div>
+                                            </div>
+                                            <div style={{ fontSize: 11, color: "#7C8A93", margin: "2px 0 12px" }}>
+                                                "Actual" hours come from real START/STOP scans on the floor, split across each job's tools by their estimated share — this number stays even after a job is deleted.
+                                                Tool life % is measured against a {TOOL_LIFE_HOURS.toFixed(1)}h reference life per tool.
+                                            </div>
+                                            <div style={styles.toolsSummaryHeaderRow}>
+                                                <span style={{ flex: 1 }}>Tool</span>
+                                                <span style={styles.toolsSummaryCol}>Jobs</span>
+                                                <span style={styles.toolsSummaryCol}>Est.</span>
+                                                <span style={styles.toolsSummaryCol}>Actual</span>
+                                                <span style={{ ...styles.toolsSummaryCol, width: 130, textAlign: "left" }}>Tool life ({TOOL_LIFE_HOURS.toFixed(1)}h)</span>
+                                            </div>
+                                            {visibleToolSummary.map((t) => {
+                                                const usedHours = t.actualHours + t.liveHours;
+                                                const overEstimate = t.estHours > 0 && usedHours > t.estHours;
+                                                const key = toolKey(t);
+                                                const lifePct = Math.min(100, (usedHours / TOOL_LIFE_HOURS) * 100);
+                                                const lifeOver = usedHours > TOOL_LIFE_HOURS;
+                                                return (
+                                                    <div
+                                                        key={key}
+                                                        style={{
+                                                            ...styles.toolsSummaryRow,
+                                                            background: selectedTool && toolKey(selectedTool) === key ? "#EAF2F4" : "transparent",
+                                                        }}
+                                                        onClick={() => setSelectedToolKey(key)}
+                                                    >
+                                                        <span style={{ flex: 1, display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
+                                                            <Wrench size={11} color="#7C8A93" style={{ flexShrink: 0 }} />
+                                                            <span style={styles.toolRowName}>{t.number ? `T${t.number} · ` : ""}{t.name}</span>
+                                                            {t.liveHours > 0 && <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 }} />}
+                                                        </span>
+                                                        <span style={styles.toolsSummaryCol}>{t.jobs.length}</span>
+                                                        <span style={styles.toolsSummaryCol}>{t.estHours.toFixed(1)}h</span>
+                                                        <span style={{ ...styles.toolsSummaryCol, color: overEstimate ? "#C4372E" : "#1B2226", fontWeight: 600 }}>{usedHours.toFixed(1)}h</span>
+                                                        <span style={{ display: "flex", alignItems: "center", gap: 6, width: 130, flexShrink: 0 }}>
+                                                            <div style={{ flex: 1, height: 6, background: "#E7EDEF", borderRadius: 4, overflow: "hidden" }}>
+                                                                <div style={{ height: "100%", width: `${lifePct}%`, borderRadius: 4, background: lifeOver ? "#F0625B" : lifePct > 75 ? "#E8A33D" : "#17A2A0" }} />
+                                                            </div>
+                                                            <span style={{ fontSize: 10.5, color: lifeOver ? "#C4372E" : "#7C8A93", fontFamily: "'IBM Plex Mono',monospace", width: 34, textAlign: "right", flexShrink: 0 }}>
+                                                                {lifePct.toFixed(0)}%
+                                                            </span>
+                                                        </span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                        </>
+                                        )}
+                                    </>
+                                )}
                             </div>
                         </div>
                     )}
@@ -1755,10 +2233,42 @@ useEffect(() => {
                                 locked (cannot be dragged)
                             </label>
 
+                            {selectedJob.tools && selectedJob.tools.length > 0 && (
+                                <div style={{ marginTop: 14 }}>
+                                    <label style={styles.fieldLabel}>tools used ({selectedJob.tools.length})</label>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                        {selectedJob.tools.map((t, i) => (
+                                            <div key={i} style={styles.toolRow}>
+                                                <Wrench size={11} color="#5B6B72" style={{ flexShrink: 0 }} />
+                                                <span style={styles.toolRowName}>{t.number ? `T${t.number}` : ""} {t.name}</span>
+                                                <span style={styles.toolRowHours}>
+                                                    {t.actualHours > 0 ? `${t.actualHours.toFixed(1)}h / ` : ""}
+                                                    {t.hours >= 0.1 ? `${t.hours.toFixed(1)}h` : "<0.1h"}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
                             {selectedJob.isRunning && (
                                 <div style={styles.runningNote}>
                                     <CheckCircle2 size={13} style={{ marginRight: 6, flexShrink: 0 }} />
                                     งานนี้กำลังทำงานอยู่ (สแกน START ล่าสุด)
+                                </div>
+                            )}
+
+                            {!selectedJob.isRunning && selectedJob.completed && (
+                                <div style={{ ...styles.runningNote, color: DONE_BLUE, background: "#EAF2F4", border: `1px solid ${DONE_BLUE}55` }}>
+                                    <CheckCircle2 size={13} style={{ marginRight: 6, flexShrink: 0 }} />
+                                    งานนี้เสร็จแล้ว{selectedJob.actualRunHours ? ` — ใช้เวลาจริง ${selectedJob.actualRunHours.toFixed(1)}h` : ""}
+                                </div>
+                            )}
+
+                            {!selectedJob.isRunning && !selectedJob.completed && !isJobBlocked(selectedJob) && selectedJob.resourceId && selectedJob.startHour + selectedJob.duration < nowHour && (
+                                <div style={{ ...styles.runningNote, color: OVERDUE_AMBER, background: OVERDUE_AMBER_BG, border: `1px solid ${OVERDUE_AMBER_BORDER}` }}>
+                                    <Clock size={13} style={{ marginRight: 6, flexShrink: 0 }} />
+                                    เลยเวลาที่กำหนดแล้วแต่ยังไม่ได้สแกนเริ่มงาน
                                 </div>
                             )}
 
@@ -2454,6 +2964,84 @@ const styles = {
     utilRowFill: { height: "100%", borderRadius: 5 },
     utilRowPct: { fontSize: 11.5, color: "#5B6B72", width: 36, textAlign: "right", flexShrink: 0, fontFamily: "'IBM Plex Mono',monospace" },
     bottleneckEmpty: { display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#5B6B72", padding: "8px 0" },
+    toolsLayout: {
+        display: "flex",
+        gap: 16,
+        alignItems: "flex-start",
+        marginBottom: 16,
+    },
+    toolsSidebar: {
+        width: 260,
+        flexShrink: 0,
+        background: "#FFFFFF",
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
+        maxHeight: 480,
+        overflowY: "auto",
+        padding: 6,
+        boxSizing: "border-box",
+    },
+    toolsSidebarItem: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "9px 10px",
+        borderRadius: 8,
+        cursor: "pointer",
+    },
+    toolsSidebarName: { fontSize: 12, fontFamily: "'IBM Plex Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+    toolsSidebarSub: { fontSize: 10, color: "#7C8A93" },
+    toolsSidebarHours: { fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: "#1B2226", flexShrink: 0 },
+    toolsDetail: {
+        flex: 1,
+        minWidth: 0,
+        background: "#FFFFFF",
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
+        padding: "16px 18px",
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
+        boxSizing: "border-box",
+    },
+    toolsSummarySection: {
+        background: "#FFFFFF",
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
+        padding: "16px 18px",
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
+        boxSizing: "border-box",
+    },
+    toolsSummaryHeaderRow: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "6px 8px",
+        fontSize: 10.5,
+        color: "#7C8A93",
+        textTransform: "uppercase",
+        letterSpacing: "0.05em",
+        borderBottom: "1px solid #E4EAEC",
+    },
+    toolsSummaryRow: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 8px",
+        borderRadius: 8,
+        cursor: "pointer",
+    },
+    toolsSummaryCol: { width: 70, flexShrink: 0, fontSize: 11.5, fontFamily: "'IBM Plex Mono',monospace", color: "#5B6B72", textAlign: "right" },
+    toolRow: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "5px 8px",
+        borderRadius: 8,
+        background: "#F7F9FA",
+        cursor: "pointer",
+    },
+    toolRowName: { fontSize: 11.5, fontFamily: "'IBM Plex Mono',monospace", color: "#1B2226", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+    toolRowHours: { fontSize: 10.5, color: "#7C8A93", fontFamily: "'IBM Plex Mono',monospace", flexShrink: 0 },
     bottleneckRow: {
         display: "flex",
         alignItems: "center",

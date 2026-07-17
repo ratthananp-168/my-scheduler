@@ -90,10 +90,66 @@ export default function ScanAction({ kind, action, id, onDone }) {
         let payload = data.data;
 
         if (kind === "job") {
-            const jobs = (data.data.jobs || []).map((j) =>
-                j.id === id ? { ...j, isRunning: action === "start", lastScanAt: new Date().toISOString() } : j
-            );
-            payload = { ...data.data, jobs };
+            const nowIso = new Date().toISOString();
+            const toolHistory = Array.isArray(data.data.toolHistory) ? data.data.toolHistory.map((h) => ({ ...h })) : [];
+
+            function upsertToolHistory(number, name, hoursToAdd, jobName) {
+                if (!name || hoursToAdd <= 0) return;
+                const idx = toolHistory.findIndex((h) => (h.number || null) === (number || null) && h.name === name);
+                if (idx === -1) {
+                    toolHistory.push({ number: number || null, name, actualHours: hoursToAdd, lastRunAt: nowIso, jobNames: jobName ? [jobName] : [] });
+                    return;
+                }
+                const existing = toolHistory[idx];
+                const jobNames = existing.jobNames ? [...existing.jobNames] : [];
+                if (jobName && !jobNames.includes(jobName)) {
+                    jobNames.push(jobName);
+                    if (jobNames.length > 20) jobNames.shift();
+                }
+                toolHistory[idx] = { ...existing, actualHours: (existing.actualHours || 0) + hoursToAdd, lastRunAt: nowIso, jobNames };
+            }
+
+            const jobs = (data.data.jobs || []).map((j) => {
+                if (j.id !== id) return j;
+
+                if (action === "start") {
+                    // job resumed - it's no longer "done" until the next stop
+                    return { ...j, isRunning: true, completed: false, runStartedAt: nowIso, lastScanAt: nowIso };
+                }
+
+                // action === "stop": close out this run and bank the real elapsed time
+                let elapsedHours = 0;
+                if (j.runStartedAt) {
+                    elapsedHours = (Date.now() - new Date(j.runStartedAt).getTime()) / 3600000;
+                    if (!Number.isFinite(elapsedHours) || elapsedHours < 0) elapsedHours = 0;
+                }
+
+                // split the real elapsed time across this job's tools, proportional to
+                // each tool's estimated share of the job (so a tool estimated at 60% of
+                // the program's cycle time also gets ~60% of the actual minutes logged).
+                // Each tool's share is ALSO banked into the persistent toolHistory ledger
+                // above (keyed by tool identity, not by job) so the total survives even if
+                // this job gets deleted later.
+                const jobTools = Array.isArray(j.tools) ? j.tools : [];
+                const estTotal = jobTools.reduce((s, t) => s + (t.hours || 0), 0);
+                const updatedTools = jobTools.map((t) => {
+                    const share = estTotal > 0 ? (t.hours || 0) / estTotal : jobTools.length ? 1 / jobTools.length : 0;
+                    const hoursToAdd = elapsedHours * share;
+                    upsertToolHistory(t.number, t.name, hoursToAdd, j.name);
+                    return { ...t, actualHours: (t.actualHours || 0) + hoursToAdd };
+                });
+
+                return {
+                    ...j,
+                    isRunning: false,
+                    completed: true,
+                    runStartedAt: null,
+                    actualRunHours: (j.actualRunHours || 0) + elapsedHours,
+                    tools: jobTools.length > 0 ? updatedTools : j.tools,
+                    lastScanAt: nowIso,
+                };
+            });
+            payload = { ...data.data, jobs, toolHistory };
         } else {
             const resources = (data.data.resources || []).map((r) =>
                 r.id === id
