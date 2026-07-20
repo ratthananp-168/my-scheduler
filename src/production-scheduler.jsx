@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
-import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, ChevronLeft, ChevronRight, QrCode, Play, Square, Zap, Upload, Wrench, Clock } from "lucide-react";
+import * as XLSX from "xlsx";
+import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, ChevronLeft, ChevronRight, QrCode, Play, Square, Zap, Upload, Wrench, Clock, FileSpreadsheet, Printer, Volume2, VolumeX } from "lucide-react";
 import { parseNCProgram, jobNameFromFilename } from "./utils/ncParser";
 
 const NAV_ITEMS = [
@@ -17,6 +18,11 @@ const ROW_HEIGHT = 64;
 const HEADER_HEIGHT = 52;
 const RESOURCE_COL_WIDTH = 168;
 const VIEW_DAY_OPTIONS = [7, 14, 30];
+// smallest increment jobs can be dragged/resized to on the Gantt chart (15 minutes)
+const SNAP_HOURS = 0.25;
+function snapHours(hours) {
+    return Math.round(hours / SNAP_HOURS) * SNAP_HOURS;
+}
 
 const RUNNING_GREEN = "#007A36";
 const RUNNING_GREEN_DARK = "#003D1B";
@@ -241,6 +247,13 @@ useEffect(() => {
     const [filterFromDate, setFilterFromDate] = useState("");
     const [filterToDate, setFilterToDate] = useState("");
     const [pendingAlarmReason, setPendingAlarmReason] = useState(ALARM_REASONS[0].id);
+    const [bulkSelectedIds, setBulkSelectedIds] = useState(() => new Set());
+    const [importError, setImportError] = useState("");
+    const excelFileInputRef = useRef(null);
+    const [alarmSoundEnabled, setAlarmSoundEnabled] = useState(true);
+    const [needsAudioUnlock, setNeedsAudioUnlock] = useState(false);
+    const audioCtxRef = useRef(null);
+    const prevAlarmIdsRef = useRef(new Set());
     const [selectedToolKey, setSelectedToolKey] = useState(null);
     const [toolsJobFilter, setToolsJobFilter] = useState("all");
     const [nowTick, setNowTick] = useState(Date.now());
@@ -554,6 +567,58 @@ useEffect(() => {
     // resources with an active alarm (from QR alarm scans or manual trigger)
     const activeAlarms = useMemo(() => resources.filter((r) => r.alarmActive), [resources]);
 
+    function playAlarmBeep() {
+        if (!alarmSoundEnabled) return;
+        try {
+            if (!audioCtxRef.current) {
+                audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const ctx = audioCtxRef.current;
+            if (ctx.state === "suspended") ctx.resume().catch(() => {});
+            const now = ctx.currentTime;
+            [0, 0.45, 0.9, 1.35].forEach((offset) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = "square";
+                osc.frequency.setValueAtTime(880, now + offset);
+                osc.frequency.setValueAtTime(660, now + offset + 0.22);
+                gain.gain.setValueAtTime(0.0001, now + offset);
+                gain.gain.exponentialRampToValueAtTime(0.35, now + offset + 0.03);
+                gain.gain.setValueAtTime(0.35, now + offset + 0.3);
+                gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.4);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(now + offset);
+                osc.stop(now + offset + 0.42);
+            });
+            setNeedsAudioUnlock(false);
+        } catch (err) {
+            setNeedsAudioUnlock(true);
+        }
+    }
+
+    // fire an immediate beep whenever a resource newly becomes alarmed (including alarms
+    // that arrive via realtime from a QR scan on another device/tab)
+    useEffect(() => {
+        const currentIds = new Set(activeAlarms.map((r) => r.id));
+        let hasNew = false;
+        currentIds.forEach((id) => {
+            if (!prevAlarmIdsRef.current.has(id)) hasNew = true;
+        });
+        prevAlarmIdsRef.current = currentIds;
+        if (hasNew) playAlarmBeep();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeAlarms]);
+
+    // keep repeating the beep periodically while at least one alarm is still active,
+    // in case the first beep gets missed
+    useEffect(() => {
+        if (activeAlarms.length === 0) return;
+        const id = setInterval(() => playAlarmBeep(), 20000);
+        return () => clearInterval(id);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeAlarms.length]);
+
     function raiseAlarm(resourceId, reasonId) {
         setResources((rs) => rs.map((r) => (r.id === resourceId ? { ...r, alarmActive: true, alarmReason: reasonId, alarmAt: Date.now() } : r)));
     }
@@ -578,12 +643,27 @@ useEffect(() => {
         const hw = hourWidthRef.current;
         const dx = e.clientX - d.startX;
         const dy = e.clientY - d.startY;
+        if (d.mode === "group-move") {
+            const deltaHours = snapHours(dx / hw);
+            const deltaRows = Math.round(dy / ROW_HEIGHT);
+            const resList = resourcesRef.current;
+            setJobs((js) =>
+                js.map((j) => {
+                    const origin = d.origins[j.id];
+                    if (!origin) return j;
+                    const newRowIndex = Math.max(0, Math.min(resList.length - 1, origin.rowIndex + deltaRows));
+                    const newStart = Math.max(0, Math.min(TOTAL_HOURS - j.duration, origin.startHour + deltaHours));
+                    return { ...j, startHour: newStart, resourceId: resList[newRowIndex].id };
+                })
+            );
+            return;
+        }
         if (d.mode === "resize") {
-            const deltaHours = Math.round(dx / hw);
-            const newDuration = Math.max(1, Math.min(TOTAL_HOURS - d.origStart, d.origDuration + deltaHours));
+            const deltaHours = snapHours(dx / hw);
+            const newDuration = Math.max(SNAP_HOURS, Math.min(TOTAL_HOURS - d.origStart, d.origDuration + deltaHours));
             setJobs((js) => js.map((j) => (j.id === d.jobId ? { ...j, duration: newDuration } : j)));
         } else {
-            const deltaHours = Math.round(dx / hw);
+            const deltaHours = snapHours(dx / hw);
             const deltaRows = Math.round(dy / ROW_HEIGHT);
             const newStart = Math.max(0, Math.min(TOTAL_HOURS - d.origDuration, d.origStart + deltaHours));
             const newRowIndex = Math.max(0, Math.min(resourcesRef.current.length - 1, d.origRowIndex + deltaRows));
@@ -611,12 +691,12 @@ useEffect(() => {
                 setJobs((js) => {
                     const job = js.find((j) => j.id === d.jobId);
                     if (!job) return js;
-                    const startHour = Math.max(0, Math.min(TOTAL_HOURS - job.duration, Math.round(localX / hw)));
+                    const startHour = Math.max(0, Math.min(TOTAL_HOURS - job.duration, snapHours(localX / hw)));
                     return js.map((j) => (j.id === d.jobId ? { ...j, resourceId: resourcesRef.current[rowIndex].id, startHour } : j));
                 });
             }
             setGhost(null);
-        } else if (d) {
+        } else if (d && d.mode !== "group-move") {
             const poolRect = poolRef.current?.getBoundingClientRect();
             if (poolRect && e.clientY >= poolRect.top) {
                 setJobs((js) => js.map((j) => (j.id === d.jobId ? { ...j, resourceId: null } : j)));
@@ -629,6 +709,43 @@ useEffect(() => {
 
     function onJobPointerDown(e, job, mode) {
         e.stopPropagation();
+        if (e.ctrlKey || e.metaKey) {
+            setBulkSelectedIds((prev) => {
+                const next = new Set(prev);
+                if (next.has(job.id)) next.delete(job.id);
+                else next.add(job.id);
+                return next;
+            });
+            setSelectedJobId(null);
+            setSelectedResourceId(null);
+            return;
+        }
+        // dragging (no ctrl) one of an existing multi-selection moves the whole group together
+        if (mode === "move" && bulkSelectedIds.size > 1 && bulkSelectedIds.has(job.id)) {
+            setSelectedJobId(null);
+            setSelectedResourceId(null);
+            const origins = {};
+            bulkSelectedIds.forEach((id) => {
+                const j = jobsRef.current.find((jj) => jj.id === id);
+                if (!j || j.locked || isJobBlocked(j)) return;
+                origins[id] = {
+                    startHour: j.startHour,
+                    rowIndex: resourcesRef.current.findIndex((r) => r.id === j.resourceId),
+                };
+            });
+            dragRef.current = {
+                mode: "group-move",
+                fromPool: false,
+                startX: e.clientX,
+                startY: e.clientY,
+                origins,
+            };
+            window.addEventListener("pointermove", handlePointerMove);
+            window.addEventListener("pointerup", handlePointerUp);
+            return;
+        }
+
+        if (bulkSelectedIds.size > 0) setBulkSelectedIds(new Set());
         setSelectedJobId(job.id);
         setSelectedResourceId(null);
         if (job.locked || isJobBlocked(job)) return;
@@ -659,6 +776,27 @@ useEffect(() => {
         setJobs((js) => js.map((j) => (j.id === id ? { ...j, ...patch } : j)));
     }
 
+    // datetime-local input <-> startHour (hours since baseDate/midnight today) conversions
+    function startHourToLocalInputValue(startHour) {
+        const d = new Date(baseDate.getTime() + startHour * 3600000);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        const h = String(d.getHours()).padStart(2, "0");
+        const min = String(d.getMinutes()).padStart(2, "0");
+        return `${y}-${m}-${day}T${h}:${min}`;
+    }
+
+    function handleStartTimeInputChange(job, value) {
+        if (!value) return;
+        const picked = new Date(value);
+        if (Number.isNaN(picked.getTime())) return;
+        const hoursFromBase = (picked.getTime() - baseDate.getTime()) / 3600000;
+        const snapped = snapHours(hoursFromBase);
+        const clamped = Math.max(0, Math.min(TOTAL_HOURS - job.duration, snapped));
+        updateJob(job.id, { startHour: clamped });
+    }
+
     function deleteJob(id) {
         setJobs((js) => js.filter((j) => j.id !== id));
         setSelectedJobId(null);
@@ -669,6 +807,214 @@ useEffect(() => {
         setResources(cloneResources());
         setSelectedJobId(null);
         setSelectedResourceId(null);
+    }
+
+    function autoFixConflicts() {
+        setJobs((js) => {
+            const byResource = {};
+            js.forEach((j) => {
+                if (!j.resourceId) return;
+                (byResource[j.resourceId] ||= []).push(j);
+            });
+            const updates = {};
+            Object.values(byResource).forEach((resJobs) => {
+                const sorted = resJobs.slice().sort((a, b) => a.startHour - b.startHour);
+                let cursor = -Infinity;
+                sorted.forEach((job) => {
+                    if (job.locked) {
+                        cursor = Math.max(cursor, job.startHour + job.duration);
+                        return;
+                    }
+                    let newStart = job.startHour;
+                    if (job.startHour < cursor) newStart = snapHours(cursor);
+                    cursor = Math.max(cursor, newStart + job.duration);
+                    if (newStart !== job.startHour) updates[job.id] = newStart;
+                });
+            });
+            if (Object.keys(updates).length === 0) return js;
+            return js.map((j) => (updates[j.id] !== undefined ? { ...j, startHour: updates[j.id] } : j));
+        });
+    }
+
+    function sanitizeFilename(name) {
+        return name.replace(/[\\/:*?"<>|]+/g, "_").trim() || "export";
+    }
+
+    async function saveWorkbook(wb, defaultName) {
+        if (window.showSaveFilePicker) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: `${defaultName}.xlsx`,
+                    types: [
+                        {
+                            description: "Excel Workbook",
+                            accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] },
+                        },
+                    ],
+                });
+                const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+                const writable = await handle.createWritable();
+                await writable.write(wbout);
+                await writable.close();
+                return;
+            } catch (err) {
+                if (err && err.name === "AbortError") return; // user cancelled the dialog
+                // fall through to download fallback below on any other error
+            }
+        }
+        const chosen = window.prompt("ตั้งชื่อไฟล์ (ไม่ต้องใส่ .xlsx)", defaultName);
+        if (chosen === null) return;
+        XLSX.writeFile(wb, `${sanitizeFilename(chosen || defaultName)}.xlsx`);
+    }
+
+    function formatDateForExcel(d) {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        const h = String(d.getHours()).padStart(2, "0");
+        const min = String(d.getMinutes()).padStart(2, "0");
+        return `${y}-${m}-${day} ${h}:${min}`;
+    }
+
+    async function exportScheduleExcel() {
+        const defaultName = `schedule_${toDateInputValue(baseDate)}`;
+        const rows = jobs
+            .slice()
+            .sort((a, b) => {
+                const ra = resources.find((r) => r.id === a.resourceId)?.name || "zzz-unscheduled";
+                const rb = resources.find((r) => r.id === b.resourceId)?.name || "zzz-unscheduled";
+                return ra.localeCompare(rb) || a.startHour - b.startHour;
+            })
+            .map((j) => {
+                const res = resources.find((r) => r.id === j.resourceId);
+                const start = j.resourceId ? new Date(baseDate.getTime() + j.startHour * 3600000) : null;
+                const end = start ? new Date(start.getTime() + j.duration * 3600000) : null;
+                const status = j.isRunning ? "Running" : j.completed ? "Done" : conflictIds.has(j.id) ? "Conflict" : !j.resourceId ? "Unscheduled" : "Scheduled";
+                return {
+                    Job: j.name,
+                    Product: j.product,
+                    Resource: res ? res.name : "unscheduled",
+                    Start: start ? formatDateForExcel(start) : "",
+                    End: end ? formatDateForExcel(end) : "",
+                    "Duration (h)": j.duration,
+                    Locked: j.locked ? "yes" : "no",
+                    Status: status,
+                };
+            });
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws["!cols"] = [{ wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 12 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Schedule");
+        await saveWorkbook(wb, defaultName);
+    }
+
+    async function exportToolsExcel() {
+        const defaultName = `tool_usage_${toDateInputValue(baseDate)}`;
+        const rows = toolSummary.map((t) => ({
+            "Tool #": t.number || "",
+            "Tool name": t.name,
+            Jobs: t.jobs.length,
+            "Estimated (h)": Number(t.estHours.toFixed(2)),
+            "Actual (h)": Number((t.actualHours + t.liveHours).toFixed(2)),
+            "Tool life used (%)": Number(Math.min(100, ((t.actualHours + t.liveHours) / TOOL_LIFE_HOURS) * 100).toFixed(0)),
+        }));
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws["!cols"] = [{ wch: 8 }, { wch: 22 }, { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 16 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Tool usage");
+        await saveWorkbook(wb, defaultName);
+    }
+
+    function printSchedule() {
+        window.print();
+    }
+
+    function handleImportExcelFile(e) {
+        const file = e.target.files?.[0];
+        e.target.value = "";
+        if (!file) return;
+        setImportError("");
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+            try {
+                const data = new Uint8Array(evt.target.result);
+                const wb = XLSX.read(data, { type: "array" });
+                const sheetName = wb.SheetNames[0];
+                const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+                if (rows.length === 0) {
+                    setImportError("ไม่พบข้อมูลในไฟล์");
+                    return;
+                }
+                let updated = 0;
+                let created = 0;
+                setJobs((js) => {
+                    const next = js.slice();
+                    const byName = new Map(next.map((j, i) => [j.name.trim().toLowerCase(), i]));
+                    rows.forEach((row) => {
+                        const name = String(row["Job"] || "").trim();
+                        if (!name) return;
+                        const productRaw = String(row["Product"] || "").trim();
+                        const product = Object.keys(PRODUCTS).find((p) => p.toLowerCase() === productRaw.toLowerCase()) || Object.keys(PRODUCTS)[0];
+                        const resourceName = String(row["Resource"] || "").trim();
+                        const res = resources.find((r) => r.name.toLowerCase() === resourceName.toLowerCase());
+                        const resourceId = res ? res.id : null;
+
+                        let startHour = 0;
+                        const startRaw = String(row["Start"] || "").trim();
+                        if (resourceId && startRaw) {
+                            const parsed = new Date(startRaw.replace(" ", "T"));
+                            if (!Number.isNaN(parsed.getTime())) {
+                                startHour = Math.max(0, snapHours((parsed.getTime() - baseDate.getTime()) / 3600000));
+                            }
+                        }
+                        const durationRaw = Number(row["Duration (h)"]);
+                        const duration = Number.isFinite(durationRaw) && durationRaw > 0 ? snapHours(durationRaw) : 1;
+                        const locked = String(row["Locked"] || "").trim().toLowerCase() === "yes";
+
+                        const key = name.toLowerCase();
+                        const existingIdx = byName.get(key);
+                        if (existingIdx !== undefined) {
+                            next[existingIdx] = { ...next[existingIdx], product, resourceId, startHour, duration, locked };
+                            updated++;
+                        } else {
+                            const id = "imp-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+                            next.push({ id, name, product, resourceId, startHour, duration, locked });
+                            byName.set(key, next.length - 1);
+                            created++;
+                        }
+                    });
+                    return next;
+                });
+                setImportError(`นำเข้าสำเร็จ — อัปเดต ${updated} งาน, สร้างใหม่ ${created} งาน`);
+            } catch (err) {
+                setImportError("อ่านไฟล์ไม่สำเร็จ ตรวจสอบว่าคอลัมน์ตรงกับไฟล์ที่ export ออกมา (Job, Product, Resource, Start, Duration (h), Locked)");
+            }
+        };
+        reader.onerror = () => setImportError("อ่านไฟล์ไม่สำเร็จ");
+        reader.readAsArrayBuffer(file);
+    }
+
+    function bulkDeleteSelected() {
+        setJobs((js) => js.filter((j) => !bulkSelectedIds.has(j.id)));
+        setBulkSelectedIds(new Set());
+    }
+
+    function bulkMoveToResource(resourceId) {
+        setJobs((js) => js.map((j) => (bulkSelectedIds.has(j.id) && !j.locked ? { ...j, resourceId } : j)));
+    }
+
+    function bulkShiftHours(deltaHours) {
+        setJobs((js) =>
+            js.map((j) => {
+                if (!bulkSelectedIds.has(j.id) || j.locked) return j;
+                const newStart = Math.max(0, Math.min(TOTAL_HOURS - j.duration, snapHours(j.startHour + deltaHours)));
+                return { ...j, startHour: newStart };
+            })
+        );
+    }
+
+    function clearBulkSelection() {
+        setBulkSelectedIds(new Set());
     }
 
     function jumpToJob(job) {
@@ -797,6 +1143,12 @@ useEffect(() => {
         }
         .ps-island-red { animation: ps-island-flash-red 0.9s ease-in-out infinite; }
         .ps-alarmraisebtn:hover { background: ${ALARM_RED_DARK} !important; }
+        .ps-print-only { display: none; }
+        @media print {
+          body * { visibility: hidden; }
+          .ps-print-only, .ps-print-only * { visibility: visible; }
+          .ps-print-only { display: block !important; position: absolute; left: 0; top: 0; width: 100%; padding: 24px; box-sizing: border-box; }
+        }
       `}</style>
 
             <div style={styles.floatCard}>
@@ -907,8 +1259,51 @@ useEffect(() => {
                                     >
                                         <Maximize2 size={13} /> {isFitted ? "undo fit" : "fit view"}
                                     </button>
+                                    {conflictCount > 0 && (
+                                        <button
+                                            className="ps-zoombtn"
+                                            style={{ ...styles.zoomBtn, width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center", background: "#FDECEB", color: "#C4372E", borderColor: "#F7CFCB" }}
+                                            onClick={autoFixConflicts}
+                                            title="auto-shift overlapping jobs to the next free slot"
+                                        >
+                                            <Wrench size={13} /> fix {conflictCount} conflict{conflictCount !== 1 ? "s" : ""}
+                                        </button>
+                                    )}
                                     <button className="ps-zoombtn" style={{ ...styles.zoomBtn, width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center" }} onClick={resetDemo}>
                                         <RotateCcw size={13} /> reset
+                                    </button>
+                                    <div style={{ width: 1, height: 20, background: "#DCE4E7" }} />
+                                    <div style={{ width: 1, height: 20, background: "#DCE4E7" }} />
+                                    <input
+                                        ref={excelFileInputRef}
+                                        type="file"
+                                        accept=".xlsx,.xls"
+                                        style={{ display: "none" }}
+                                        onChange={handleImportExcelFile}
+                                    />
+                                    <button
+                                        className="ps-zoombtn"
+                                        style={{ ...styles.zoomBtn, width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center" }}
+                                        onClick={() => excelFileInputRef.current?.click()}
+                                        title="import schedule from Excel (matches Job by name)"
+                                    >
+                                        <Upload size={13} /> Import Excel
+                                    </button>
+                                    <button
+                                        className="ps-zoombtn"
+                                        style={{ ...styles.zoomBtn, width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center" }}
+                                        onClick={exportScheduleExcel}
+                                        title="export schedule as Excel"
+                                    >
+                                        <FileSpreadsheet size={13} /> Excel
+                                    </button>
+                                    <button
+                                        className="ps-zoombtn"
+                                        style={{ ...styles.zoomBtn, width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center" }}
+                                        onClick={printSchedule}
+                                        title="print / save as PDF"
+                                    >
+                                        <Printer size={13} /> Print / PDF
                                     </button>
                                 </>
                             )}
@@ -950,6 +1345,22 @@ useEffect(() => {
                                         <AlertOctagon size={13} color="#FFFFFF" strokeWidth={2.5} />
                                         แจ้งเตือน ({activeAlarms.length})
                                     </div>
+                                    {needsAudioUnlock && (
+                                        <button
+                                            style={styles.alarmUnlockBtn}
+                                            onClick={playAlarmBeep}
+                                            title="เบราว์เซอร์บล็อกเสียงอัตโนมัติ กดเพื่อเปิดเสียงแจ้งเตือน"
+                                        >
+                                            <Volume2 size={12} /> เปิดเสียง
+                                        </button>
+                                    )}
+                                    <button
+                                        style={styles.alarmMuteBtn}
+                                        onClick={() => setAlarmSoundEnabled((v) => !v)}
+                                        title={alarmSoundEnabled ? "ปิดเสียงแจ้งเตือน" : "เปิดเสียงแจ้งเตือน"}
+                                    >
+                                        {alarmSoundEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
+                                    </button>
                                     <div style={styles.statusBarStrip} className="ps-scroll">
                                         {activeAlarms.map((r) => (
                                             <div key={r.id} className="ps-alarmchip" style={styles.alarmChip}>
@@ -1128,6 +1539,15 @@ useEffect(() => {
 
                     {activeNav === "schedule" && (
                         <>
+                            {importError && (
+                                <div style={{ ...styles.qrIntro, margin: "0 18px 0", borderRadius: 0, borderLeft: "none", borderRight: "none" }}>
+                                    <FileSpreadsheet size={14} color="#2F6E86" />
+                                    <span>{importError}</span>
+                                    <button style={{ ...styles.searchClearBtn, marginLeft: "auto" }} onClick={() => setImportError("")}>
+                                        <X size={13} />
+                                    </button>
+                                </div>
+                            )}
                             <div style={styles.filterBar}>
                                 <div style={{ position: "relative" }}>
                                     <div style={styles.searchBox}>
@@ -1259,6 +1679,10 @@ useEffect(() => {
                                     <Clock size={12} color={OVERDUE_AMBER} style={{ marginRight: 4 }} />
                                     Overdue
                                 </div>
+                                <div style={styles.legendDivider} />
+                                <div style={{ ...styles.legendItem, color: "#9AA7AC", fontStyle: "italic" }}>
+                                    ctrl/cmd + click job เพื่อเลือกหลายอัน
+                                </div>
                             </div>
 
                             <div
@@ -1268,6 +1692,7 @@ useEffect(() => {
                                 onPointerDown={() => {
                                     setSelectedJobId(null);
                                     setSelectedResourceId(null);
+                                    setBulkSelectedIds(new Set());
                                 }}
                             >
                                 <div style={{ position: "relative", width: RESOURCE_COL_WIDTH + timelineWidth }}>
@@ -1426,6 +1851,7 @@ useEffect(() => {
                                                         .filter((j) => j.resourceId === r.id)
                                                         .map((job) => {
                                                             const isConflict = conflictIds.has(job.id);
+                                                            const bulkSelected = bulkSelectedIds.has(job.id);
                                                             const color = PRODUCTS[job.product];
                                                             const selected = selectedJobId === job.id;
                                                             const dimmed = isFilterActive && !jobMatchesFilter(job);
@@ -1444,11 +1870,15 @@ useEffect(() => {
                                                                         width: Math.max(6, job.duration * hourWidth - 2),
                                                                         top: 7,
                                                                         height: ROW_HEIGHT - 14,
-                                                                        background: blocked ? "#FBE4E2" : job.isRunning ? JOB_RUNNING_GREEN : isDone ? "#EAF2F4" : isOverdue ? OVERDUE_AMBER_BG : job.locked ? `${color}22` : "#FFFFFF",
-                                                                        border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_AMBER_BORDER}` : isConflict ? "1px solid #F0625B" : isDone ? `1px solid ${DONE_BLUE}55` : job.locked ? `1px solid ${color}77` : "1px solid #E4EAEC",
+background: blocked ? "#FBE4E2" : job.isRunning ? JOB_RUNNING_GREEN : isDone ? "#EAF2F4" : isOverdue ? OVERDUE_AMBER_BG : job.locked ? `${color}22` : `${color}40`,
+border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_AMBER_BORDER}` : isConflict ? "1px solid #F0625B" : isDone ? `1px solid ${DONE_BLUE}55` : job.locked ? `1px solid ${color}77` : `1px solid ${color}AA`,
                                                                         borderLeftWidth: 4,
                                                                         borderLeftColor: blocked ? ALARM_RED : isOverdue ? OVERDUE_AMBER_BORDER : isDone ? DONE_BLUE : color,
-                                                                        boxShadow: selected ? `0 0 0 2px ${color}55, 0 4px 10px rgba(47,110,134,0.12)` : "0 1px 4px rgba(47,110,134,0.08)",
+                                                                        boxShadow: bulkSelected
+                                                                            ? `0 0 0 2px #2F6E86, 0 0 0 4px rgba(47,110,134,0.25)`
+                                                                            : selected
+                                                                            ? `0 0 0 2px ${color}55, 0 4px 10px rgba(47,110,134,0.12)`
+                                                                            : "0 1px 4px rgba(47,110,134,0.08)",
                                                                         borderRadius: 12,
                                                                         cursor: blocked ? "not-allowed" : job.locked ? "pointer" : "grab",
                                                                         overflow: "hidden",
@@ -1516,6 +1946,11 @@ useEffect(() => {
                                                                         )}
                                                                     </div>
                                                                     {isConflict && <AlertTriangle size={11} color="#F0625B" style={{ position: "absolute", top: 4, right: 4, zIndex: 2 }} />}
+                                                                    {bulkSelected && (
+                                                                        <div style={{ position: "absolute", top: 4, left: 4, zIndex: 3, width: 14, height: 14, borderRadius: "50%", background: "#2F6E86", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                                                            <CheckCircle2 size={10} color="#FFFFFF" />
+                                                                        </div>
+                                                                    )}
                                                                     {!job.locked && !blocked && (
                                                                         <div
                                                                             onPointerDown={(e) => onJobPointerDown(e, job, "resize")}
@@ -1988,9 +2423,19 @@ useEffect(() => {
                                         </div>
 
                                         <div style={styles.toolsSummarySection}>
-                                            <div style={styles.analyticsCardHeader}>
-                                                <BarChart3 size={15} color="#2F6E86" />
-                                                <span style={styles.analyticsCardTitle}>Overview — All Tools</span>
+                                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                                                <div style={{ ...styles.analyticsCardHeader, marginBottom: 0 }}>
+                                                    <BarChart3 size={15} color="#2F6E86" />
+                                                    <span style={styles.analyticsCardTitle}>Overview — All Tools</span>
+                                                </div>
+                                                <button
+                                                    className="ps-zoombtn"
+                                                    style={{ ...styles.zoomBtn, width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center" }}
+                                                    onClick={exportToolsExcel}
+                                                    title="export tool usage as Excel"
+                                                >
+                                                    <FileSpreadsheet size={13} /> Excel
+                                                </button>
                                             </div>
                                             <div style={styles.analyticsStatsRow}>
                                                 <div style={styles.analyticsStat}>
@@ -2178,6 +2623,37 @@ useEffect(() => {
                         </div>
                     )}
 
+                    {bulkSelectedIds.size > 0 && (
+                        <div style={styles.bulkBar}>
+                            <span style={styles.bulkBarCount}>{bulkSelectedIds.size} selected</span>
+                            <div style={styles.bulkBarDivider} />
+                            <button style={styles.bulkBarBtn} onClick={() => bulkShiftHours(-1)}><ChevronLeft size={12} />1h</button>
+                            <button style={styles.bulkBarBtn} onClick={() => bulkShiftHours(1)}>1h<ChevronRight size={12} /></button>
+                            <button style={styles.bulkBarBtn} onClick={() => bulkShiftHours(-24)}>-1d</button>
+                            <button style={styles.bulkBarBtn} onClick={() => bulkShiftHours(24)}>+1d</button>
+                            <select
+                                className="ps-select"
+                                style={{ width: "auto", minWidth: 150 }}
+                                defaultValue=""
+                                onChange={(e) => {
+                                    if (e.target.value) bulkMoveToResource(e.target.value);
+                                    e.target.value = "";
+                                }}
+                            >
+                                <option value="" disabled>move to resource...</option>
+                                {resources.map((r) => (
+                                    <option key={r.id} value={r.id}>{r.name}</option>
+                                ))}
+                            </select>
+                            <button style={styles.bulkBarDeleteBtn} onClick={bulkDeleteSelected}>
+                                <Trash2 size={12} /> delete
+                            </button>
+                            <button style={styles.bulkBarClearBtn} onClick={clearBulkSelection}>
+                                <X size={14} />
+                            </button>
+                        </div>
+                    )}
+
                     {selectedJob && (
                         <div style={styles.panel}>
                             <div style={styles.panelHeader}>
@@ -2224,16 +2700,27 @@ useEffect(() => {
                             <input
                                 className="ps-input"
                                 type="number"
-                                min={1}
+                                min={SNAP_HOURS}
+                                step={SNAP_HOURS}
                                 max={TOTAL_HOURS}
                                 value={selectedJob.duration}
-                                onChange={(e) => updateJob(selectedJob.id, { duration: Math.max(1, Number(e.target.value) || 1) })}
+                                onChange={(e) => updateJob(selectedJob.id, { duration: Math.max(SNAP_HOURS, snapHours(Number(e.target.value) || SNAP_HOURS)) })}
                             />
 
                             {selectedJob.resourceId && (
-                                <div style={{ fontSize: 11.5, color: "#7C8A93", marginTop: 4, fontFamily: "'IBM Plex Mono',monospace" }}>
-                                    starts {new Date(baseDate.getTime() + selectedJob.startHour * 3600000).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-                                </div>
+                                <>
+                                    <label style={styles.fieldLabel}>start time</label>
+                                    <input
+                                        className="ps-input"
+                                        type="datetime-local"
+                                        step={SNAP_HOURS * 3600}
+                                        value={startHourToLocalInputValue(selectedJob.startHour)}
+                                        onChange={(e) => handleStartTimeInputChange(selectedJob, e.target.value)}
+                                    />
+                                    <div style={{ fontSize: 11.5, color: "#7C8A93", marginTop: 4, fontFamily: "'IBM Plex Mono',monospace" }}>
+                                        starts {new Date(baseDate.getTime() + selectedJob.startHour * 3600000).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                                    </div>
+                                </>
                             )}
 
                             <label style={{ ...styles.fieldLabel, display: "flex", alignItems: "center", gap: 6, marginTop: 14 }}>
@@ -2382,6 +2869,50 @@ useEffect(() => {
                         </div>
                     )}
                 </div>
+            </div>
+
+            <div className="ps-print-only">
+                <div style={{ fontFamily: "'Poppins',sans-serif", fontSize: 18, fontWeight: 700, marginBottom: 2 }}>Production Schedule Report</div>
+                <div style={{ fontFamily: "'Inter',sans-serif", fontSize: 11, color: "#5B6B72", marginBottom: 16 }}>
+                    {DAYS}-day window from {baseDate.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} · generated {new Date().toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "'Inter',sans-serif", fontSize: 11 }}>
+                    <thead>
+                        <tr>
+                            {["Job", "Product", "Resource", "Start", "End", "Duration", "Status"].map((h) => (
+                                <th key={h} style={{ textAlign: "left", borderBottom: "2px solid #1B2226", padding: "6px 8px", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                                    {h}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {jobs
+                            .slice()
+                            .sort((a, b) => {
+                                const ra = resources.find((r) => r.id === a.resourceId)?.name || "zzz-unscheduled";
+                                const rb = resources.find((r) => r.id === b.resourceId)?.name || "zzz-unscheduled";
+                                return ra.localeCompare(rb) || a.startHour - b.startHour;
+                            })
+                            .map((j) => {
+                                const res = resources.find((r) => r.id === j.resourceId);
+                                const start = j.resourceId ? new Date(baseDate.getTime() + j.startHour * 3600000) : null;
+                                const end = start ? new Date(start.getTime() + j.duration * 3600000) : null;
+                                const status = j.isRunning ? "Running" : j.completed ? "Done" : conflictIds.has(j.id) ? "Conflict" : !j.resourceId ? "Unscheduled" : "Scheduled";
+                                return (
+                                    <tr key={j.id}>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7", fontFamily: "'IBM Plex Mono',monospace" }}>{j.name}</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{j.product}</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{res ? res.name : "—"}</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{start ? start.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{end ? end.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{j.duration}h</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{status}</td>
+                                    </tr>
+                                );
+                            })}
+                    </tbody>
+                </table>
             </div>
 
         </div>
@@ -2650,6 +3181,36 @@ const styles = {
         marginLeft: 2,
         padding: 0,
         transition: "background 0.15s ease",
+    },
+    alarmMuteBtn: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        border: "none",
+        background: "rgba(255,255,255,0.2)",
+        color: "#FFFFFF",
+        borderRadius: "50%",
+        width: 24,
+        height: 24,
+        cursor: "pointer",
+        padding: 0,
+    },
+    alarmUnlockBtn: {
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        flexShrink: 0,
+        border: "none",
+        background: "#FFFFFF",
+        color: "#B23218",
+        borderRadius: 14,
+        padding: "4px 9px",
+        fontSize: 10.5,
+        fontWeight: 700,
+        cursor: "pointer",
+        fontFamily: "'Inter',sans-serif",
+        whiteSpace: "nowrap",
     },
     alarmActiveNote: {
         display: "flex",
@@ -3246,4 +3807,61 @@ const styles = {
     qrImageBlock: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
     qrImage: { width: "100%", maxWidth: 130, height: "auto", borderRadius: 8, border: "1px solid #E4EAEC" },
     qrLabel: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, fontFamily: "'Inter',sans-serif" },
+    bulkBar: {
+        position: "absolute",
+        bottom: 18,
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 90,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        background: "#1B2226",
+        borderRadius: 16,
+        padding: "8px 12px",
+        boxShadow: "0 10px 28px rgba(27,34,38,0.35)",
+    },
+    bulkBarCount: { fontSize: 12.5, fontWeight: 600, color: "#FFFFFF", fontFamily: "'Inter',sans-serif", whiteSpace: "nowrap", paddingLeft: 4 },
+    bulkBarDivider: { width: 1, height: 18, background: "rgba(255,255,255,0.2)" },
+    bulkBarBtn: {
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        background: "rgba(255,255,255,0.1)",
+        border: "1px solid rgba(255,255,255,0.18)",
+        color: "#FFFFFF",
+        borderRadius: 14,
+        padding: "6px 10px",
+        fontSize: 11.5,
+        cursor: "pointer",
+        fontFamily: "'Inter',sans-serif",
+        whiteSpace: "nowrap",
+    },
+    bulkBarDeleteBtn: {
+        display: "flex",
+        alignItems: "center",
+        gap: 5,
+        background: "rgba(240,98,91,0.18)",
+        border: "1px solid rgba(240,98,91,0.4)",
+        color: "#FF8B83",
+        borderRadius: 14,
+        padding: "6px 12px",
+        fontSize: 12,
+        cursor: "pointer",
+        fontFamily: "'Inter',sans-serif",
+        whiteSpace: "nowrap",
+    },
+    bulkBarClearBtn: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(255,255,255,0.12)",
+        border: "none",
+        color: "#FFFFFF",
+        borderRadius: "50%",
+        width: 26,
+        height: 26,
+        cursor: "pointer",
+        flexShrink: 0,
+    },
 };
