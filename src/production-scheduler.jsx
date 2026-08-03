@@ -3233,8 +3233,11 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                             );
                                                         })}
                                                     {/* ── Actual-run bars: grey bg at real scan-start, fill = elapsed ── */}
-                                                    {scheduledJobs
-                                                        .filter((j) => j.resourceId === r.id && j.runStartedAt && (j.isRunning || j.completed))
+                                                    {/* actualResourceId: set when operator scanned a different machine (override) */}
+                                                    {[...scheduledJobs
+                                                        .filter((j) => j.resourceId === r.id && !j.actualResourceId && j.runStartedAt && (j.isRunning || j.completed)),
+                                                      ...scheduledJobs
+                                                        .filter((j) => j.actualResourceId === r.id && j.runStartedAt && (j.isRunning || j.completed))]
                                                         .map((job) => {
                                                             const runStart = new Date(job.runStartedAt);
                                                             const barStartH = (runStart.getTime() - baseDate.getTime()) / 3600000;
@@ -3252,9 +3255,9 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                 <div
                                                                     key={`actual-${job.id}`}
                                                                     title={isRunning
-                                                                        ? `${job.name} · Running · ${elapsedMin}min elapsed / ${(job.duration*60).toFixed(0)}min planned`
-                                                                        : `${job.name} · Done · ${elapsedMin}min actual / ${(job.duration*60).toFixed(0)}min planned`}
-                                                                    style={{ position: "absolute", left: barStartH * hourWidth, width: bgW, top: ROW_HEIGHT - 20, height: 15, borderRadius: 3, background: "#D4D4D4", border: "1px solid #B0B0B0", borderLeft: "3px solid #909090", overflow: "hidden", pointerEvents: "none", zIndex: 3, boxSizing: "border-box" }}
+                                                                        ? `${job.name} · Running · ${elapsedMin}min elapsed / ${(job.duration*60).toFixed(0)}min planned${job.actualResourceId ? " · ⚠ Override from planned resource" : ""}`
+                                                                        : `${job.name} · Done · ${elapsedMin}min actual / ${(job.duration*60).toFixed(0)}min planned${job.actualResourceId ? " · ⚠ Override from planned resource" : ""}`}
+                                                                    style={{ position: "absolute", left: barStartH * hourWidth, width: bgW, top: ROW_HEIGHT - 20, height: 15, borderRadius: 3, background: "#D4D4D4", border: job.actualResourceId ? "1px solid #F59E0B" : "1px solid #B0B0B0", borderLeft: job.actualResourceId ? "3px solid #D97706" : "3px solid #909090", overflow: "hidden", pointerEvents: "none", zIndex: 3, boxSizing: "border-box" }}
                                                                 >
                                                                     <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: Math.min(fillW, bgW), background: fillBg, borderLeft: `3px solid ${fillColor}`, transition: isRunning ? "width 1s linear" : "none" }} />
                                                                     <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", gap: 3, paddingLeft: 5, zIndex: 1 }}>

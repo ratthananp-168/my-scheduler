@@ -41,6 +41,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
     const [allData,     setAllData]     = useState(null);
     const [camError,    setCamError]    = useState("");
     const [scanning,    setScanning]    = useState(false);
+    const [isOverride,  setIsOverride]  = useState(false);
 
     const videoRef   = useRef(null);
     const canvasRef  = useRef(null);
@@ -175,6 +176,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
         }
 
         const match = planned && boundResource && planned.id === boundResource.id;
+        setIsOverride(!match);
         setPhase(match ? "bind_job_confirm" : "bind_mismatch");
     }
 
@@ -186,8 +188,18 @@ export default function ScanAction({ kind, action, id, onDone }) {
         if (error || !data?.data) { setPhase("error"); setErrorMsg("โหลดข้อมูลไม่สำเร็จ"); return; }
 
         const nowIso = new Date().toISOString();
+        // override → record actualResourceId (where it's actually running)
+        // planning resourceId stays unchanged so Gantt planning bar doesn't move
+        const actualResId = isOverride && resource ? resource.id : null;
         const jobs = (data.data.jobs || []).map((j) =>
-            j.id !== targetJob.id ? j : { ...j, isRunning: true, runStartedAt: nowIso, lastScanAt: nowIso, completed: false }
+            j.id !== targetJob.id ? j : {
+                ...j,
+                isRunning: true,
+                runStartedAt: nowIso,
+                lastScanAt: nowIso,
+                completed: false,
+                actualResourceId: actualResId,
+            }
         );
         const { error: ue } = await supabase
             .from("schedule_state")
