@@ -21,10 +21,17 @@ const BIND_BG            = "#EFF6FF";
 // Parse QR URL → { kind, jobId } or null
 function parseQRUrl(text) {
     try {
-        const url    = new URL(text);
-        const params = url.searchParams;
-        const scan   = params.get("scan");
-        const job    = params.get("job");
+        // support both absolute URLs and raw query strings
+        let params;
+        if (text.startsWith("http")) {
+            params = new URL(text).searchParams;
+        } else if (text.includes("?")) {
+            params = new URLSearchParams(text.split("?")[1]);
+        } else {
+            params = new URLSearchParams(text);
+        }
+        const scan = params.get("scan");
+        const job  = params.get("job");
         if (scan === "start" && job) return { kind: "start", jobId: job };
     } catch {}
     return null;
@@ -104,7 +111,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
                 const parsed = parseQRUrl(code.data);
                 if (parsed) {
                     stopCamera();
-                    handleJobScanned(parsed.jobId, resource, allData);
+                    handleJobScanned(parsed.jobId, resource);
                     return;
                 }
             }
@@ -161,9 +168,16 @@ export default function ScanAction({ kind, action, id, onDone }) {
     }
 
     // ── Job scanned (from camera decode) ─────────────────────────────────────
-    function handleJobScanned(jobId, boundResource, sd) {
+    async function handleJobScanned(jobId, boundResource) {
+        setPhase("loading");
+        // always fetch fresh data — allData may be stale if jobs changed after page load
+        const { data, error } = await supabase
+            .from("schedule_state").select("data").eq("id", 1).single();
+        if (error || !data?.data) { setPhase("error"); setErrorMsg("โหลดข้อมูลไม่สำเร็จ"); return; }
+
+        const sd = data.data;
         const j = (sd.jobs || []).find((jj) => jj.id === jobId);
-        if (!j) { setErrorMsg("ไม่พบงาน id: " + jobId); setPhase("error"); return; }
+        if (!j) { setPhase("error"); setErrorMsg("ไม่พบงาน id: " + jobId); return; }
         const planned = (sd.resources || []).find((r) => r.id === j.resourceId) || null;
         setJob(j);
         setPlannedRes(planned);
