@@ -37,6 +37,34 @@ function parseQRUrl(text) {
     return null;
 }
 
+// ── Session bound-resource (set after scan 1, read at scan 2) ────────────────
+const SS_RES_ID   = "ps-bound-resource-id";
+const SS_RES_NAME = "ps-bound-resource-name";
+const SS_RES_AT   = "ps-bound-resource-at";
+const BIND_EXPIRE  = 30 * 60 * 1000; // 30 min
+
+function getBoundResource() {
+    try {
+        const id   = sessionStorage.getItem(SS_RES_ID);
+        const name = sessionStorage.getItem(SS_RES_NAME);
+        const at   = parseInt(sessionStorage.getItem(SS_RES_AT) || "0", 10);
+        if (!id || Date.now() - at > BIND_EXPIRE) { clearBoundResource(); return null; }
+        return { id, name };
+    } catch { return null; }
+}
+function saveBoundResource(id, name) {
+    try {
+        sessionStorage.setItem(SS_RES_ID, id);
+        sessionStorage.setItem(SS_RES_NAME, name);
+        sessionStorage.setItem(SS_RES_AT, String(Date.now()));
+    } catch {}
+}
+function clearBoundResource() {
+    try {
+        [SS_RES_ID, SS_RES_NAME, SS_RES_AT].forEach((k) => sessionStorage.removeItem(k));
+    } catch {}
+}
+
 export default function ScanAction({ kind, action, id, onDone }) {
     const [phase,       setPhase]       = useState("loading");
     const [resource,    setResource]    = useState(null);
@@ -53,6 +81,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
     const [overridePin,  setOverridePinVal] = useState("");
     const [pinInput,     setPinInput]     = useState("");
     const [pinError,     setPinError]     = useState("");
+    const [boundForStandalone, setBoundForStandalone] = useState(null); // bound resource in standalone job flow
 
     const videoRef   = useRef(null);
     const canvasRef  = useRef(null);
@@ -149,11 +178,30 @@ export default function ScanAction({ kind, action, id, onDone }) {
             const res = (sd.resources || []).find((r) => r.id === j.resourceId);
             setJob(j);
             setPlannedRes(res || null);
-            if (action === "start" && res?.alarmActive) {
-                const label = ALARM_REASONS.find((a) => a.id === res.alarmReason)?.label || "แจ้งเตือน";
-                setBlockReason(label);
-                setPhase("blocked");
+
+            if (action === "start") {
+                // require scan 1 (machine bind) before scan 2 (job start)
+                const bound = getBoundResource();
+                if (!bound) {
+                    setPhase("no_bind");
+                    return;
+                }
+                // check alarm
+                if (res?.alarmActive) {
+                    const label = ALARM_REASONS.find((a) => a.id === res.alarmReason)?.label || "แจ้งเตือน";
+                    setBlockReason(label);
+                    setPhase("blocked");
+                    return;
+                }
+                // check mismatch
+                const pin = sd.appConfig?.overridePin || "";
+                setOverridePinVal(pin);
+                const match = res && bound.id === res.id;
+                setIsOverride(!match);
+                setBoundForStandalone(bound);
+                setPhase(match ? "job_confirm" : "standalone_mismatch");
             } else {
+                // stop — no bind required
                 setPhase("job_confirm");
             }
 
@@ -167,6 +215,9 @@ export default function ScanAction({ kind, action, id, onDone }) {
 
     // ── Bind confirm → open camera ────────────────────────────────────────────
     function handleConfirmBind() {
+        // save bound resource to sessionStorage so scan-2 (job QR) can read it
+        // even if opened in a new URL/tab on the same device
+        saveBoundResource(resource.id, resource.name);
         setPhase("bind_scanning");
         setTimeout(startCamera, 80); // let DOM render first
     }
@@ -256,7 +307,10 @@ export default function ScanAction({ kind, action, id, onDone }) {
 
         const jobs = (data.data.jobs || []).map((j) => {
             if (j.id !== id) return j;
-            if (action === "start") return { ...j, isRunning: true, runStartedAt: nowIso, lastScanAt: nowIso, completed: false };
+            if (action === "start") {
+                const actualResId = isOverride && boundForStandalone ? boundForStandalone.id : null;
+                return { ...j, isRunning: true, runStartedAt: nowIso, lastScanAt: nowIso, completed: false, actualResourceId: actualResId };
+            }
             const elapsedH = j.runStartedAt ? Math.max(0, (Date.now() - new Date(j.runStartedAt).getTime()) / 3600000) : 0;
             const jt = Array.isArray(j.tools) ? j.tools : [];
             const est = jt.reduce((s, t) => s + (t.hours || 0), 0);
@@ -437,6 +491,61 @@ export default function ScanAction({ kind, action, id, onDone }) {
                     </>
                 )}
 
+                {/* ── No bind: scanned job before machine ── */}
+                {phase === "no_bind" && (
+                    <>
+                        <div style={{ ...styles.badge, background: "#FEF3C7", color: WARN_AMBER }}>
+                            ⚠ ยังไม่ได้สแกนเครื่อง
+                        </div>
+                        <div style={{ ...styles.iconWrap, background: "#FEF3C7" }}>
+                            <Cpu size={28} color={WARN_AMBER} strokeWidth={2.5} />
+                        </div>
+                        <div style={styles.mono}>{job?.name}</div>
+                        <div style={{ ...styles.title, color: WARN_AMBER, marginTop: 8 }}>
+                            กรุณาสแกนเครื่องก่อน
+                        </div>
+                        <div style={styles.sub}>
+                            ต้องสแกน QR เครื่อง (BIND) ก่อนเสมอ<br />
+                            แล้วค่อยสแกน QR งาน (START)
+                        </div>
+                        <button className="ps-btn-primary" style={styles.btn} onClick={onDone}>
+                            กลับไปสแกนเครื่อง
+                        </button>
+                    </>
+                )}
+
+                {/* ── Standalone mismatch (job scanned via URL, bound resource doesn't match) ── */}
+                {phase === "standalone_mismatch" && job && (
+                    <>
+                        <div style={{ ...styles.badge, background: "#FEF3C7", color: WARN_AMBER }}>⚠ งานไม่ตรงกับเครื่องที่เลือก</div>
+                        <div style={{ ...styles.iconWrap, background: "#FEF3C7" }}>
+                            <AlertCircle size={28} color={WARN_AMBER} strokeWidth={2.5} />
+                        </div>
+                        <div style={styles.mono}>{job.name}</div>
+                        <div style={styles.mismatchTable}>
+                            <div style={styles.mismatchRow}>
+                                <span style={styles.mismatchLabel}>เครื่องที่สแกน</span>
+                                <span style={{ ...styles.mismatchVal, color: WARN_AMBER }}>{boundForStandalone?.name || "—"}</span>
+                            </div>
+                            <div style={{ ...styles.mismatchRow, borderTop: "1px solid #E8E8E8", paddingTop: 6 }}>
+                                <span style={styles.mismatchLabel}>เครื่องตาม Planning</span>
+                                <span style={{ ...styles.mismatchVal, color: RUNNING_GREEN_DARK }}>{plannedRes?.name || "ไม่ได้กำหนด"}</span>
+                            </div>
+                        </div>
+                        <div style={styles.warnBox}>
+                            งานนี้ถูกวางแผนไว้บน <b>{plannedRes?.name || "เครื่องอื่น"}</b><br />
+                            กรุณาตรวจสอบกับ Supervisor ก่อนดำเนินการต่อ
+                        </div>
+                        <div style={styles.btnRow}>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>ยกเลิก</button>
+                            <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: WARN_AMBER, fontSize: 12.5 }}
+                                onClick={() => { setPinInput(""); setPinError(""); overridePin ? setShowPinModal(true) : setPhase("job_confirm"); }}>
+                                Override &amp; เริ่มงาน
+                            </button>
+                        </div>
+                    </>
+                )}
+
                 {/* ── Standalone job confirm ── */}
                 {phase === "job_confirm" && job && (
                     <>
@@ -548,8 +657,10 @@ export default function ScanAction({ kind, action, id, onDone }) {
                             onChange={(e) => { setPinInput(e.target.value.replace(/\D/g, "")); setPinError(""); }}
                             onKeyDown={(e) => {
                                 if (e.key === "Enter") {
-                                    if (pinInput === overridePin) { setShowPinModal(false); setPhase("bind_job_confirm"); }
-                                    else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
+                                    if (pinInput === overridePin) {
+                                        setShowPinModal(false);
+                                        setPhase(phase === "bind_mismatch" || kind === "bind" ? "bind_job_confirm" : "job_confirm");
+                                    } else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
                                 }
                             }}
                             autoFocus
@@ -569,8 +680,11 @@ export default function ScanAction({ kind, action, id, onDone }) {
                             </button>
                             <button style={{ flex: 1.5, background: WARN_AMBER, color: "#FFFFFF", border: "none", borderRadius: 6, padding: "11px 0", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}
                                 onClick={() => {
-                                    if (pinInput === overridePin) { setShowPinModal(false); setPhase("bind_job_confirm"); }
-                                    else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
+                                    if (pinInput === overridePin) {
+                                        setShowPinModal(false);
+                                        // bind flow → bind_job_confirm, standalone flow → job_confirm
+                                        setPhase(phase === "bind_mismatch" || kind === "bind" ? "bind_job_confirm" : "job_confirm");
+                                    } else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
                                 }}>
                                 ยืนยัน
                             </button>
