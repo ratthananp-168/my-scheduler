@@ -187,7 +187,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
 
         const nowIso = new Date().toISOString();
         const jobs = (data.data.jobs || []).map((j) =>
-            j.id !== targetJob.id ? j : { ...j, isRunning: true, startedAt: nowIso, isDone: false }
+            j.id !== targetJob.id ? j : { ...j, isRunning: true, runStartedAt: nowIso, lastScanAt: nowIso, completed: false }
         );
         const { error: ue } = await supabase
             .from("schedule_state")
@@ -218,8 +218,8 @@ export default function ScanAction({ kind, action, id, onDone }) {
 
         const jobs = (data.data.jobs || []).map((j) => {
             if (j.id !== id) return j;
-            if (action === "start") return { ...j, isRunning: true, startedAt: nowIso, isDone: false };
-            const elapsedH = j.startedAt ? Math.max(0, (Date.now() - new Date(j.startedAt).getTime()) / 3600000) : 0;
+            if (action === "start") return { ...j, isRunning: true, runStartedAt: nowIso, lastScanAt: nowIso, completed: false };
+            const elapsedH = j.runStartedAt ? Math.max(0, (Date.now() - new Date(j.runStartedAt).getTime()) / 3600000) : 0;
             const jt = Array.isArray(j.tools) ? j.tools : [];
             const est = jt.reduce((s, t) => s + (t.hours || 0), 0);
             const updTools = jt.map((t) => {
@@ -228,7 +228,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
                 upsertTool(t.number, t.name, h, j.name);
                 return { ...t, actualHours: (t.actualHours || 0) + h };
             });
-            return { ...j, isRunning: false, isDone: true, startedAt: null, actualRunHours: (j.actualRunHours || 0) + elapsedH, tools: jt.length > 0 ? updTools : j.tools };
+            return { ...j, isRunning: false, completed: true, runStartedAt: null, lastScanAt: nowIso, actualRunHours: (j.actualRunHours || 0) + elapsedH, tools: jt.length > 0 ? updTools : j.tools };
         });
 
         const { error: ue } = await supabase.from("schedule_state")
