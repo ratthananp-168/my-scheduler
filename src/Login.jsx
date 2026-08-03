@@ -23,64 +23,94 @@ export default function Login({ onSuccess }) {
     return (
         <div style={styles.wrap}>
             <style>{`
-                @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');
-                .ps-login-input:focus { outline: none; border-color: #2F6E86 !important; box-shadow: 0 0 0 3px rgba(47,110,134,0.14); }
-                .ps-login-btn:hover { background: #234F60 !important; }
+                @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&display=swap');
+                .ps-login-input:focus {
+                    outline: none;
+                    border-color: #1976D2 !important;
+                    box-shadow: 0 0 0 1px rgba(25,118,210,0.35);
+                }
+                .ps-login-input::placeholder { color: #9A9A9A; }
+                .ps-login-btn:hover { background: #1565C0 !important; }
+                .ps-login-btn:active { background: #0F559E !important; }
             `}</style>
             <form onSubmit={handleSubmit} style={styles.card}>
-                <div style={styles.iconWrap}>
-                    <Lock size={20} color="#2F6E86" />
-                </div>
-                <div style={styles.title}>Production Scheduler</div>
-                <div style={styles.sub}>sign in to continue</div>
-
-                <input
-                    className="ps-login-input"
-                    type="text"
-                    autoFocus
-                    autoCapitalize="none"
-                    value={username}
-                    onChange={(e) => {
-                        setUsername(e.target.value);
-                        setError(false);
-                    }}
-                    placeholder="username"
-                    style={{
-                        ...styles.input,
-                        borderColor: error ? "#F0625B" : "#DCE4E7",
-                        marginBottom: 10,
-                    }}
-                />
-
-                <input
-                    className="ps-login-input"
-                    type="password"
-                    value={password}
-                    onChange={(e) => {
-                        setPassword(e.target.value);
-                        setError(false);
-                    }}
-                    placeholder="password"
-                    style={{
-                        ...styles.input,
-                        borderColor: error ? "#F0625B" : "#DCE4E7",
-                    }}
-                />
-
-                {error && (
-                    <div style={styles.errorRow}>
-                        <AlertCircle size={13} style={{ marginRight: 5, flexShrink: 0 }} />
-                        incorrect username or password
+                {/* NX-style ribbon/title bar */}
+                <div style={styles.titleBar}>
+                    <div style={styles.titleBarLeft}>
+                        <Lock size={13} color="#1976D2" style={{ marginRight: 8, flexShrink: 0 }} />
+                        <span style={styles.titleBarText}>
+                            ProdSched
+                            <span style={styles.tabUnderline} />
+                        </span>
                     </div>
-                )}
+                    <span style={styles.titleBarDim}>Sign In</span>
+                </div>
 
-                <button type="submit" className="ps-login-btn" style={styles.btn}>
-                    Enter
-                </button>
+                <div style={styles.body}>
+                    <div style={styles.title}>Production Scheduler</div>
+                    <div style={styles.sub}>Enter your credentials to continue</div>
+
+                    <div style={styles.fieldLabel}>Username</div>
+                    <input
+                        className="ps-login-input"
+                        type="text"
+                        autoFocus
+                        autoCapitalize="none"
+                        value={username}
+                        onChange={(e) => {
+                            setUsername(e.target.value);
+                            setError(false);
+                        }}
+                        placeholder="username"
+                        style={{
+                            ...styles.input,
+                            borderColor: error ? "#D83B01" : "#ABABAB",
+                            marginBottom: 14,
+                        }}
+                    />
+
+                    <div style={styles.fieldLabel}>Password</div>
+                    <input
+                        className="ps-login-input"
+                        type="password"
+                        value={password}
+                        onChange={(e) => {
+                            setPassword(e.target.value);
+                            setError(false);
+                        }}
+                        placeholder="password"
+                        style={{
+                            ...styles.input,
+                            borderColor: error ? "#D83B01" : "#ABABAB",
+                        }}
+                    />
+
+                    {error && (
+                        <div style={styles.errorRow}>
+                            <AlertCircle size={13} style={{ marginRight: 6, flexShrink: 0 }} />
+                            Incorrect username or password
+                        </div>
+                    )}
+
+                    <button type="submit" className="ps-login-btn" style={styles.btn}>
+                        Enter
+                    </button>
+                </div>
             </form>
         </div>
     );
 }
+
+// ===== Siemens NX light palette (matched to NX - Manufacturing) =====
+// window bg    #F0F0F0 → #FFFFFF  (viewport gradient)
+// ribbon       #FFFFFF            (title/ribbon area)
+// panel line   #D4D4D4            (dividers)
+// border       #ABABAB            (control outlines)
+// text         #262626            (primary)
+// text dim     #6E6E6E            (secondary)
+// accent blue  #1976D2            (operation names / selection)
+// accent gold  #F2A900            (active ribbon tab underline)
+// error        #D83B01
 
 const styles = {
     wrap: {
@@ -89,76 +119,114 @@ const styles = {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "#F7F9FA",
-        fontFamily: "'Inter', sans-serif",
+        // NX viewport-style light falloff
+        background: "linear-gradient(180deg, #FDFDFD 0%, #F1F3F5 55%, #E6EAED 100%)",
+        fontFamily: "'Segoe UI', 'Inter', sans-serif",
         boxSizing: "border-box",
     },
     card: {
-        width: 320,
+        width: 340,
         background: "#FFFFFF",
-        border: "1px solid #E4EAEC",
-        borderRadius: 18,
-        padding: "28px 26px",
+        border: "1px solid #C8C8C8",
+        borderRadius: 4,
         display: "flex",
         flexDirection: "column",
-        alignItems: "center",
-        boxShadow: "0 8px 28px rgba(27,34,38,0.08)",
+        boxShadow: "0 6px 24px rgba(38,38,38,0.14)",
         boxSizing: "border-box",
+        overflow: "hidden",
     },
-    iconWrap: {
-        width: 44,
-        height: 44,
-        borderRadius: 12,
-        background: "#E7EEF1",
+    titleBar: {
         display: "flex",
         alignItems: "center",
-        justifyContent: "center",
-        marginBottom: 14,
+        justifyContent: "space-between",
+        background: "#F5F6F7",
+        borderBottom: "1px solid #D4D4D4",
+        padding: "8px 12px",
+        boxSizing: "border-box",
+    },
+    titleBarLeft: {
+        display: "flex",
+        alignItems: "center",
+        minWidth: 0,
+    },
+    titleBarText: {
+        position: "relative",
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontWeight: 600,
+        fontSize: 12,
+        letterSpacing: 0.5,
+        color: "#262626",
+        paddingBottom: 3,
+    },
+    // gold underline like the active "Home" ribbon tab in NX
+    tabUnderline: {
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: 2,
+        background: "#F2A900",
+        borderRadius: 1,
+    },
+    titleBarDim: {
+        fontSize: 11,
+        color: "#6E6E6E",
+    },
+    body: {
+        display: "flex",
+        flexDirection: "column",
+        padding: "24px 24px 22px",
+        boxSizing: "border-box",
     },
     title: {
-        fontFamily: "'Poppins', sans-serif",
-        fontWeight: 700,
-        fontSize: 16,
-        color: "#1B2226",
+        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontWeight: 600,
+        fontSize: 16.5,
+        color: "#262626",
         marginBottom: 4,
-        textAlign: "center",
     },
     sub: {
-        fontSize: 12.5,
-        color: "#7C8A93",
+        fontSize: 12,
+        color: "#6E6E6E",
         marginBottom: 20,
-        textAlign: "center",
+    },
+    fieldLabel: {
+        fontSize: 11.5,
+        fontWeight: 600,
+        color: "#444444",
+        marginBottom: 5,
     },
     input: {
         width: "100%",
-        background: "#F2F6F7",
-        border: "1px solid #DCE4E7",
-        borderRadius: 10,
-        padding: "10px 12px",
-        fontFamily: "'Inter', sans-serif",
+        background: "#FFFFFF",
+        border: "1px solid #ABABAB",
+        borderRadius: 2,
+        padding: "9px 10px",
+        fontFamily: "'Segoe UI', 'Inter', sans-serif",
         fontSize: 13.5,
-        color: "#1B2226",
+        color: "#262626",
         boxSizing: "border-box",
+        transition: "border-color 0.12s ease, box-shadow 0.12s ease",
     },
     errorRow: {
         display: "flex",
         alignItems: "center",
         fontSize: 11.5,
-        color: "#C4372E",
-        marginTop: 8,
-        alignSelf: "flex-start",
+        color: "#D83B01",
+        marginTop: 10,
     },
     btn: {
         width: "100%",
-        marginTop: 16,
-        background: "#2F6E86",
+        marginTop: 20,
+        background: "#1976D2",
         color: "#FFFFFF",
-        border: "none",
-        borderRadius: 10,
-        padding: "10px 0",
+        border: "1px solid #0F559E",
+        borderRadius: 2,
+        padding: "9px 0",
         fontSize: 13.5,
         fontWeight: 600,
         cursor: "pointer",
-        fontFamily: "'Inter', sans-serif",
+        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        transition: "background 0.12s ease",
     },
 };

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
 import * as XLSX from "xlsx";
-import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, Minimize2, ChevronLeft, ChevronRight, QrCode, Play, Square, Zap, Upload, Wrench, Clock, FileSpreadsheet, Printer, Volume2, VolumeX, Settings, Plus, Coffee, PieChart, Layers, Package, LogOut, History as HistoryIcon, Move, Link2, Cpu } from "lucide-react";
+import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, Minimize2, ChevronLeft, ChevronRight, QrCode, Play, Square, Zap, Upload, Wrench, Clock, FileSpreadsheet, Printer, Volume2, VolumeX, Settings, Plus, Coffee, PieChart, Layers, Package, LogOut, History as HistoryIcon, Move } from "lucide-react";
 import { parseNCProgram, jobNameFromFilename } from "./utils/ncParser";
 
 const NAV_ITEMS = [
@@ -16,7 +16,7 @@ const NAV_ITEMS = [
 
 const DAY_ABBR_LOCALE = { weekday: "short" };
 
-const ROW_HEIGHT = 80;
+const ROW_HEIGHT = 64;
 const HEADER_HEIGHT = 68;
 const SHIFT_BAND_HEIGHT = 16;
 const RESOURCE_COL_WIDTH = 168;
@@ -34,12 +34,12 @@ function cloneShifts() {
 }
 function textColorForBg(hex) {
     const c = (hex || "#FFFFFF").replace("#", "");
-    if (c.length !== 6) return "#404040";
+    if (c.length !== 6) return "#33424A";
     const r = parseInt(c.substring(0, 2), 16);
     const g = parseInt(c.substring(2, 4), 16);
     const b = parseInt(c.substring(4, 6), 16);
     const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    return lum > 0.6 ? "#404040" : "#FFFFFF";
+    return lum > 0.6 ? "#33424A" : "#FFFFFF";
 }
 function hourToTimeInput(h) {
     const hh = Math.floor(h) % 24;
@@ -77,22 +77,11 @@ function playAlarmTone(ctx, now) {
         osc.stop(now + offset + 0.42);
     });
 }
-// smallest increment jobs can be dragged/resized to on the Gantt chart. Previously a fixed
-// 15-minute grid; now 1 minute everywhere in the app (drag, resize, bulk shift, manual time
-// entry, Excel import, tool-change duration growth) - fine enough to feel unrestricted for
-// normal dragging, while keeping stored times as clean whole minutes instead of raw floats
-// that could drift into ugly fractional-second values after repeated drags.
-const SNAP_HOURS = 1 / 60;
+// smallest increment jobs can be dragged/resized to on the Gantt chart (15 minutes)
+const SNAP_HOURS = 0.25;
 function snapHours(hours) {
     return Math.round(hours / SNAP_HOURS) * SNAP_HOURS;
 }
-// how close a "to" job's start has to be to its linked "from" job's end+changeover to still
-// count as adjacent - used both to prune stale links after a drag and, as a defense-in-depth
-// safety net, to decide what's actually drawn as a connector at render time. Link positions are
-// placed exactly (not grid-snapped), so this only needs to absorb floating-point rounding, not
-// a real grid mismatch - but a normal drag on either job still snaps to SNAP_HOURS as usual,
-// which is what correctly pushes it back out of tolerance and detaches the link.
-const LINK_TOLERANCE_HOURS = 0.0005;
 
 const RUNNING_GREEN = "#007A36";
 const RUNNING_GREEN_DARK = "#003D1B";
@@ -104,7 +93,7 @@ const JOB_RUNNING_GREEN = "#00C853";
 const ALARM_RED = "#FF2D20";
 const ALARM_RED_DARK = "#D6180A";
 
-const DONE_BLUE = "#1B6E8C";
+const DONE_BLUE = "#2F6E86";
 const OVERDUE_AMBER = "#B45309";
 const OVERDUE_AMBER_BORDER = "#E8A33D";
 const OVERDUE_AMBER_BG = "#FDF3E4";
@@ -112,10 +101,10 @@ const OVERDUE_AMBER_BG = "#FDF3E4";
 // order, color, and label for the job-status breakdown donut on the Analytics page
 const JOB_STATUS_META = [
     { key: "running", label: "Running", color: JOB_RUNNING_GREEN },
-    { key: "scheduled", label: "Scheduled", color: "#4FA8C9" },
+    { key: "scheduled", label: "Scheduled", color: "#3E96B8" },
     { key: "overdue", label: "Overdue", color: OVERDUE_AMBER },
     { key: "done", label: "Done", color: DONE_BLUE },
-    { key: "unscheduled", label: "Unscheduled", color: "#ABABAB" },
+    { key: "unscheduled", label: "Unscheduled", color: "#B7C4C9" },
 ];
 
 // reference tool life used to gauge wear-out risk on the Tools page - every tool is
@@ -127,30 +116,29 @@ const AUDIT_LOG_MAX = 200;
 
 // icon + color per audit log action type, used on the History page
 const ACTION_META = {
-    job_created: { Icon: Plus, color: "#1B6E8C" },
+    job_created: { Icon: Plus, color: "#2F6E86" },
     job_deleted: { Icon: Trash2, color: "#C4372E" },
     job_bulk_deleted: { Icon: Trash2, color: "#C4372E" },
-    job_moved: { Icon: Move, color: "#4FA8C9" },
-    job_resized: { Icon: Move, color: "#4FA8C9" },
-    job_scheduled: { Icon: CalendarDays, color: "#4FA8C9" },
-    job_unscheduled: { Icon: CalendarDays, color: "#6E6E6E" },
-    job_bulk_moved: { Icon: Move, color: "#4FA8C9" },
-    job_move_undone: { Icon: RotateCcw, color: "#6E6E6E" },
+    job_moved: { Icon: Move, color: "#3E96B8" },
+    job_resized: { Icon: Move, color: "#3E96B8" },
+    job_scheduled: { Icon: CalendarDays, color: "#3E96B8" },
+    job_unscheduled: { Icon: CalendarDays, color: "#7C8A93" },
+    job_bulk_moved: { Icon: Move, color: "#3E96B8" },
+    job_move_undone: { Icon: RotateCcw, color: "#7C8A93" },
     job_started: { Icon: Play, color: RUNNING_GREEN },
     job_stopped: { Icon: Square, color: DONE_BLUE },
     alarm_raised: { Icon: AlertOctagon, color: ALARM_RED_DARK },
-    alarm_cleared: { Icon: CheckCircle2, color: "#21A366" },
-    resource_created: { Icon: Plus, color: "#1B6E8C" },
+    alarm_cleared: { Icon: CheckCircle2, color: "#17A2A0" },
+    resource_created: { Icon: Plus, color: "#2F6E86" },
     resource_deleted: { Icon: Trash2, color: "#C4372E" },
     resource_status_changed: { Icon: Cog, color: OVERDUE_AMBER },
-    shift_created: { Icon: Plus, color: "#1B6E8C" },
+    shift_created: { Icon: Plus, color: "#2F6E86" },
     shift_deleted: { Icon: Trash2, color: "#C4372E" },
-    nc_created: { Icon: Upload, color: "#1B6E8C" },
+    nc_created: { Icon: Upload, color: "#2F6E86" },
     nc_updated: { Icon: Upload, color: OVERDUE_AMBER },
-    job_linked: { Icon: Link2, color: "#1B6E8C" },
 };
 function actionMeta(action) {
-    return ACTION_META[action] || { Icon: HistoryIcon, color: "#6E6E6E" };
+    return ACTION_META[action] || { Icon: HistoryIcon, color: "#7C8A93" };
 }
 
 // short "5m ago" / "2h ago" style relative time for the History page
@@ -196,9 +184,9 @@ const INITIAL_RESOURCES = [
 ];
 
 const PRODUCTS = {
-    Bracket: "#1B6E8C",
-    Housing: "#21A366",
-    Panel: "#4FA8C9",
+    Bracket: "#2F6E86",
+    Housing: "#17A2A0",
+    Panel: "#3E96B8",
     Fixture: "#E0559B",
     Rework: "#F0625B",
 };
@@ -222,8 +210,8 @@ const INITIAL_JOBS = [
 ];
 
 const STATUS_META = {
-    running: { label: "Running", color: "#21A366", Icon: CheckCircle2 },
-    idle: { label: "Idle", color: "#6E6E6E", Icon: PauseCircle },
+    running: { label: "Running", color: "#17A2A0", Icon: CheckCircle2 },
+    idle: { label: "Idle", color: "#7C8A93", Icon: PauseCircle },
     maintenance: { label: "Maintenance", color: "#E8A33D", Icon: Cog },
     down: { label: "Down", color: "#F0625B", Icon: CircleOff },
 };
@@ -268,11 +256,6 @@ const [toolHistory, setToolHistory] = useState([]);
 // feed, unlike toolHistory's authoritative hour totals.
 const [auditLog, setAuditLog] = useState([]);
 const [shiftConfig, setShiftConfig] = useState(cloneShifts);
-// sequential links between two jobs on the same resource, created when a dragged job is
-// dropped on top of another (a collision) and the person enters a changeover time instead of
-// leaving them stuck overlapping. { id, fromJobId, toJobId, changeoverMin }. Rendered as a
-// connecting line on the Gantt chart between the two job blocks.
-const [jobLinks, setJobLinks] = useState([]);
 const [loaded, setLoaded] = useState(false);
 const skipNextRealtimeRef = useRef(false);
 // true when jobs/resources were just set FROM Supabase (initial load or a realtime event from
@@ -303,7 +286,6 @@ useEffect(() => {
                 setToolHistory(data.data.toolHistory || []);
                 setAuditLog(data.data.auditLog || []);
                 setShiftConfig(data.data.shiftConfig || cloneShifts());
-                setJobLinks(data.data.jobLinks || []);
             }
             setLoaded(true);
         });
@@ -358,9 +340,6 @@ useEffect(() => {
                 if (incoming.shiftConfig) {
                     setShiftConfig(incoming.shiftConfig);
                 }
-                if (incoming.jobLinks) {
-                    setJobLinks(incoming.jobLinks);
-                }
 
                 // if we kept an in-progress edit, this update is NOT a pure remote sync -
                 // let the autosave effect below run normally so the edit still gets saved
@@ -388,31 +367,12 @@ useEffect(() => {
         skipNextRealtimeRef.current = true;
         supabase
             .from("schedule_state")
-            .update({ data: { jobs, resources, toolHistory, auditLog, shiftConfig, jobLinks }, updated_at: new Date().toISOString() })
+            .update({ data: { jobs, resources, toolHistory, auditLog, shiftConfig }, updated_at: new Date().toISOString() })
             .eq("id", 1)
             .then();
     }, 800);
     return () => clearTimeout(timer);
-}, [jobs, resources, toolHistory, auditLog, shiftConfig, jobLinks, loaded]);
-
-// belt-and-suspenders consistency pass: re-validate every job link any time `jobs` changes,
-// no matter *why* it changed - a plain drag, a resize, a bulk shift, a manual edit in the side
-// panel, dropping a job back onto the grid from the unscheduled pool, deleting a job/resource,
-// an NC re-import, or even an incoming realtime update from someone else's tab. Threading a
-// manual pruneStaleLinks() call into every individual place that can move a job kept missing
-// edge cases (pool drops, cross-tab updates, etc.), so this effect is the actual guarantee:
-// a link can never survive more than one render past the moment its two jobs stop being
-// exactly back-to-back, regardless of which code path caused that.
-useEffect(() => {
-    setJobLinks((links) => {
-        const pruned = pruneStaleLinks(jobs, links);
-        // skip the update (and the save/broadcast it would trigger) when nothing changed
-        if (pruned.length === links.length && pruned.every((l, i) => l === links[i])) return links;
-        return pruned;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [jobs]);
-
+}, [jobs, resources, toolHistory, auditLog, shiftConfig, loaded]);
     const [hourWidth, setHourWidth] = useState(22);
     const [selectedJobId, setSelectedJobId] = useState(null);
     const [selectedResourceId, setSelectedResourceId] = useState(null);
@@ -426,11 +386,6 @@ useEffect(() => {
     function requestConfirm(opts) {
         setConfirmDialog(opts);
     }
-    // popup shown when a dragged job is dropped on top of another job on the same resource -
-    // lets the person enter a changeover time between the two instead of leaving them stuck
-    // overlapping. null when hidden; otherwise { fromJobId, fromJobName, toJobId, toJobName,
-    // resourceId, changeoverMin, revert: { jobId, startHour, duration, resourceId } }
-    const [linkPrompt, setLinkPrompt] = useState(null);
     // which History entry's inline detail is expanded (null = none)
     const [selectedHistoryEntryId, setSelectedHistoryEntryId] = useState(null);
     const [activeNav, setActiveNav] = useState("home");
@@ -460,8 +415,6 @@ useEffect(() => {
     }, [alarmSoundEnabled]);
     const [selectedToolKey, setSelectedToolKey] = useState(null);
     const [toolsJobFilter, setToolsJobFilter] = useState("all");
-    // index of the tool-change row currently being drag-and-drop reordered in the job panel
-    const [draggedToolChangeIdx, setDraggedToolChangeIdx] = useState(null);
     const [nowTick, setNowTick] = useState(Date.now());
     useEffect(() => {
         const t = setInterval(() => setNowTick(Date.now()), 30000);
@@ -495,50 +448,43 @@ useEffect(() => {
         if (files.length === 0) return;
         setNcImportNotices([]);
 
-        // A synchronously-maintained snapshot of jobs for this whole import batch. FileReader
-        // callbacks fire asynchronously, but JS itself is single-threaded, so only one onload
-        // below ever runs at a time - each file's onload reads and updates this same array in
-        // turn, so a second file always sees the first file's result even if their reads
-        // finish close together. setJobs is then called with a *plain array* (not a function),
-        // so there's no dependency on exactly when/how many times React internally invokes a
-        // functional updater - the outcome for the notice/log is computed and used immediately,
-        // in the same synchronous block, every time.
-        let workingJobs = jobsRef.current;
-
         files.forEach((file) => {
             const reader = new FileReader();
             reader.onload = () => {
                 try {
                     const { hours, source, tools } = parseNCProgram(String(reader.result || ""));
-                    const duration = Math.max(SNAP_HOURS, snapHours(hours)); // round to nearest minute
+                    const duration = Math.max(0.25, Math.round(hours * 4) / 4); // round to nearest 15 min
                     const ncFilePath = file.name;
                     const newSig = ncContentSignature(duration, tools);
                     const noticeId = "ncnotice-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
 
-                    const existingIdx = workingJobs.findIndex((j) => j.ncFilePath === ncFilePath);
-                    let nextWorkingJobs;
-                    let outcome;
-
-                    if (existingIdx !== -1) {
-                        const existing = workingJobs[existingIdx];
-                        const oldSig = ncContentSignature(existing.duration, existing.tools);
-                        const changed = oldSig !== newSig;
-                        const refreshedToolChanges = toolChangesFromParsedTools(tools);
-                        const updatedJob = {
-                            ...existing,
-                            duration,
-                            ncSource: source,
-                            ncFileName: file.name,
-                            ncFilePath,
-                            toolChanges: refreshedToolChanges,
-                            tools: recomputeAggregatedTools(refreshedToolChanges),
-                        };
-                        nextWorkingJobs = workingJobs.slice();
-                        nextWorkingJobs[existingIdx] = updatedJob;
-                        outcome = { kind: "existing", changed, jobId: existing.id, jobName: existing.name, fromDuration: existing.duration, toDuration: duration };
-                    } else {
+                    setJobs((js) => {
+                        const existingIdx = js.findIndex((j) => j.ncFilePath === ncFilePath);
+                        if (existingIdx !== -1) {
+                            const existing = js[existingIdx];
+                            const oldSig = ncContentSignature(existing.duration, existing.tools);
+                            const changed = oldSig !== newSig;
+                            const next = js.slice();
+                            next[existingIdx] = {
+                                ...existing,
+                                duration,
+                                ncSource: source,
+                                ncFileName: file.name,
+                                ncFilePath,
+                                tools,
+                            };
+                            setSelectedJobId(existing.id);
+                            setSelectedResourceId(null);
+                            if (changed) {
+                                setNcImportNotices((ns) => [...ns, { id: noticeId, type: "updated", text: `"${file.name}" updated existing job "${existing.name}" — est. time ${existing.duration.toFixed(2)}h → ${duration.toFixed(2)}h (revision detected)` }]);
+                                logActivity("nc_updated", `${existing.name} refreshed from ${file.name} (content changed)`, { jobId: existing.id, fileName: file.name, fromDuration: existing.duration, toDuration: duration });
+                            } else {
+                                setNcImportNotices((ns) => [...ns, { id: noticeId, type: "unchanged", text: `"${file.name}" already imported as "${existing.name}" — no changes, nothing new added` }]);
+                                logActivity("nc_updated", `${existing.name} re-imported from ${file.name} (no change)`, { jobId: existing.id, fileName: file.name, fromDuration: existing.duration, toDuration: duration });
+                            }
+                            return next;
+                        }
                         const id = "nc-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
-                        const initialToolChanges = toolChangesFromParsedTools(tools);
                         const newJob = {
                             id,
                             name: jobNameFromFilename(file.name),
@@ -550,28 +496,14 @@ useEffect(() => {
                             ncSource: source,
                             ncFileName: file.name,
                             ncFilePath,
-                            toolChanges: initialToolChanges,
-                            tools: recomputeAggregatedTools(initialToolChanges),
+                            tools,
                         };
-                        nextWorkingJobs = [...workingJobs, newJob];
-                        outcome = { kind: "created", jobId: id, jobName: newJob.name };
-                    }
-
-                    workingJobs = nextWorkingJobs;
-                    setJobs(nextWorkingJobs);
-
-                    setSelectedJobId(outcome.jobId);
-                    setSelectedResourceId(null);
-                    if (outcome.kind === "created") {
-                        setNcImportNotices((ns) => [...ns, { id: noticeId, type: "created", text: `"${file.name}" imported as new job "${outcome.jobName}"` }]);
-                        logActivity("nc_created", `${outcome.jobName} created from ${file.name}`, { jobId: outcome.jobId });
-                    } else if (outcome.changed) {
-                        setNcImportNotices((ns) => [...ns, { id: noticeId, type: "updated", text: `"${file.name}" updated existing job "${outcome.jobName}" — est. time ${outcome.fromDuration.toFixed(2)}h → ${outcome.toDuration.toFixed(2)}h (revision detected)` }]);
-                        logActivity("nc_updated", `${outcome.jobName} refreshed from ${file.name} (content changed)`, { jobId: outcome.jobId, fileName: file.name, fromDuration: outcome.fromDuration, toDuration: outcome.toDuration });
-                    } else {
-                        setNcImportNotices((ns) => [...ns, { id: noticeId, type: "unchanged", text: `"${file.name}" already imported as "${outcome.jobName}" — no changes, nothing new added` }]);
-                        logActivity("nc_updated", `${outcome.jobName} re-imported from ${file.name} (no change)`, { jobId: outcome.jobId, fileName: file.name, fromDuration: outcome.fromDuration, toDuration: outcome.toDuration });
-                    }
+                        setSelectedJobId(id);
+                        setSelectedResourceId(null);
+                        setNcImportNotices((ns) => [...ns, { id: noticeId, type: "created", text: `"${file.name}" imported as new job "${newJob.name}"` }]);
+                        logActivity("nc_created", `${newJob.name} created from ${file.name}`, { jobId: id });
+                        return [...js, newJob];
+                    });
                 } catch {
                     setNcImportNotices((ns) => [...ns, { id: "ncnotice-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7), type: "error", text: `Couldn't read "${file.name}"` }]);
                 }
@@ -771,7 +703,7 @@ useEffect(() => {
                             {formatScheduleTime(m.fromStartHour) && <span style={styles.historyFromToSub}>{formatScheduleTime(m.fromStartHour)}</span>}
                             {m.fromDuration != null && <span style={styles.historyFromToSub}>{m.fromDuration}h</span>}
                         </div>
-                        <ArrowRight size={16} color="#ABABAB" style={{ flexShrink: 0 }} />
+                        <ArrowRight size={16} color="#B7C4C9" style={{ flexShrink: 0 }} />
                         <div style={styles.historyFromToCol}>
                             <span style={styles.historyFromToLabel}>To</span>
                             <span style={styles.historyFromToValue}>{m.toResourceName || "—"}</span>
@@ -902,40 +834,6 @@ useEffect(() => {
         return { avgUtil, busiest, totalConflictJobs, bottlenecks };
     }, [resources, utilization, resourceConflictCounts, conflictIds]);
 
-    // Today's job summary: jobs whose planned window overlaps today
-    const todaySummary = useMemo(() => {
-        const todayStartH = Math.floor(nowHour / 24) * 24;
-        const todayEndH = todayStartH + 24;
-        const todayJobs = jobs.filter((j) => j.resourceId && j.startHour < todayEndH && j.startHour + j.duration > todayStartH);
-        const total = todayJobs.length;
-        const done = todayJobs.filter((j) => j.completed).length;
-        const running = todayJobs.filter((j) => j.isRunning).length;
-        const overdue = todayJobs.filter((j) => !j.isRunning && !j.completed && j.startHour + j.duration < nowHour).length;
-        const scheduled = total - done - running - overdue;
-
-        // For completed jobs: compare actual run hours vs planned duration
-        const completedWithTiming = todayJobs
-            .filter((j) => j.completed && j.runStartedAt && j.actualRunHours != null)
-            .map((j) => {
-                const actualH = j.actualRunHours;
-                const plannedH = j.duration;
-                const diffMin = Math.round((actualH - plannedH) * 60);
-                return {
-                    id: j.id, name: j.name, product: j.product,
-                    resourceId: j.resourceId,
-                    plannedH, actualH, diffMin,
-                    status: diffMin > 0 ? "delayed" : diffMin < 0 ? "early" : "on-time",
-                };
-            });
-        const delayedCount = completedWithTiming.filter((j) => j.status === "delayed").length;
-        const earlyCount   = completedWithTiming.filter((j) => j.status === "early").length;
-        const onTimeCount  = completedWithTiming.filter((j) => j.status === "on-time").length;
-        const avgDelayMin  = completedWithTiming.filter((j) => j.status === "delayed").reduce((s, j) => s + j.diffMin, 0) / (delayedCount || 1);
-        const avgEarlyMin  = Math.abs(completedWithTiming.filter((j) => j.status === "early").reduce((s, j) => s + j.diffMin, 0) / (earlyCount || 1));
-
-        return { total, done, running, overdue, scheduled, completedWithTiming, delayedCount, earlyCount, onTimeCount, avgDelayMin, avgEarlyMin };
-    }, [jobs, nowHour]);
-
     // how many jobs currently sit in each lifecycle state - powers the status breakdown
     // donut on the Analytics page. Mirrors the same running/done/overdue logic used to
     // color job blocks on the Gantt chart, just aggregated across all jobs.
@@ -960,7 +858,7 @@ useEffect(() => {
             map[j.product].hours += j.duration;
         });
         return Object.entries(map)
-            .map(([product, v]) => ({ product, ...v, color: PRODUCTS[product] || "#6E6E6E" }))
+            .map(([product, v]) => ({ product, ...v, color: PRODUCTS[product] || "#7C8A93" }))
             .sort((a, b) => b.hours - a.hours);
     }, [jobs]);
 
@@ -996,7 +894,6 @@ useEffect(() => {
                 opCount: 0,
                 jobs: [],
                 historicalJobNames: h.jobNames || [],
-                maxLife: h.maxLife || null,
             });
         });
 
@@ -1046,8 +943,7 @@ useEffect(() => {
         return toolSummary
             .map((t) => {
                 const usedHours = t.actualHours + t.liveHours;
-                const refLife = t.maxLife || TOOL_LIFE_HOURS;
-                return { ...t, usedHours, lifePct: Math.min(100, (usedHours / refLife) * 100) };
+                return { ...t, usedHours, lifePct: Math.min(100, (usedHours / TOOL_LIFE_HOURS) * 100) };
             })
             .filter((t) => t.lifePct >= 80)
             .sort((a, b) => b.lifePct - a.lifePct);
@@ -1206,130 +1102,6 @@ useEffect(() => {
         return !!res?.alarmActive;
     }
 
-    // finds another job on the same resource whose time window overlaps the given one -
-    // called right after a drag lands, to offer linking the two with a changeover time
-    // instead of silently leaving them stuck overlapping
-    function findOverlapOnResource(jobsList, resourceId, startHour, duration, excludeJobId) {
-        return jobsList.find(
-            (j) => j.resourceId === resourceId && j.id !== excludeJobId && startHour < j.startHour + j.duration && startHour + duration > j.startHour
-        );
-    }
-
-    // drops any job link whose two jobs are no longer sitting exactly back-to-back (same
-    // resource, "to" starting right after "from" plus its changeover). Called after anything
-    // that can move/resize/unschedule a job, so dragging a linked job away automatically
-    // detaches the link instead of leaving a stale connector pointing at an old position.
-    // Dragging a *group* that includes both linked jobs together keeps them adjacent, so the
-    // link naturally survives that case too - only jobs that actually moved apart get dropped.
-    // true if the two jobs referenced by a link are still sitting exactly back-to-back (same
-    // resource, "to" starting right at "from"'s end plus its stored changeover)
-    function isLinkStillAdjacent(fromJ, toJ, link) {
-        if (!fromJ || !toJ) return false;
-        if (!fromJ.resourceId || !toJ.resourceId || fromJ.resourceId !== toJ.resourceId) return false;
-        const expectedStart = fromJ.startHour + fromJ.duration + (Number(link.changeoverMin) || 0) / 60;
-        return Math.abs(toJ.startHour - expectedStart) < LINK_TOLERANCE_HOURS;
-    }
-
-    function pruneStaleLinks(jobsList, links) {
-        return links.filter((link) => {
-            const fromJ = jobsList.find((j) => j.id === link.fromJobId);
-            const toJ = jobsList.find((j) => j.id === link.toJobId);
-            return isLinkStillAdjacent(fromJ, toJ, link);
-        });
-    }
-
-    // opens the changeover popup for a just-dropped job that landed on top of `otherJob`.
-    // Whichever of the two starts earlier is treated as "from" and the later one as "to" -
-    // confirming keeps the earlier job in place and pushes the dragged job to sit right
-    // after/before it, separated by the entered changeover time.
-    function openChangeoverPrompt(draggedJobId, draggedJobName, draggedStart, draggedDuration, resourceId, otherJob, revert) {
-        const draggedIsAfter = draggedStart >= otherJob.startHour;
-        setLinkPrompt({
-            reason: "collision",
-            fromJobId: draggedIsAfter ? otherJob.id : draggedJobId,
-            fromJobName: draggedIsAfter ? otherJob.name : draggedJobName,
-            toJobId: draggedIsAfter ? draggedJobId : otherJob.id,
-            toJobName: draggedIsAfter ? draggedJobName : otherJob.name,
-            resourceId,
-            draggedJobId,
-            draggedIsAfter,
-            draggedDuration,
-            otherStart: otherJob.startHour,
-            otherDuration: otherJob.duration,
-            changeoverMin: 15,
-            revert,
-        });
-    }
-
-    // manual alternative to the drag-collision popup: pick exactly two jobs (ctrl/cmd+click)
-    // and link them without needing to actually drag one on top of the other. The earlier
-    // job stays put; the later one gets moved to start right after it once confirmed.
-    function canManualLinkSelection() {
-        if (bulkSelectedIds.size !== 2) return false;
-        const [idA, idB] = Array.from(bulkSelectedIds);
-        const a = jobs.find((j) => j.id === idA);
-        const b = jobs.find((j) => j.id === idB);
-        return !!(a && b && a.resourceId && b.resourceId && a.resourceId === b.resourceId);
-    }
-
-    function openManualLinkPrompt() {
-        const [idA, idB] = Array.from(bulkSelectedIds);
-        const a = jobs.find((j) => j.id === idA);
-        const b = jobs.find((j) => j.id === idB);
-        if (!a || !b || !a.resourceId || !b.resourceId || a.resourceId !== b.resourceId) return;
-        const [earlier, later] = a.startHour <= b.startHour ? [a, b] : [b, a];
-        setLinkPrompt({
-            reason: "manual",
-            fromJobId: earlier.id,
-            fromJobName: earlier.name,
-            toJobId: later.id,
-            toJobName: later.name,
-            resourceId: earlier.resourceId,
-            draggedJobId: later.id,
-            draggedIsAfter: true,
-            draggedDuration: later.duration,
-            otherStart: earlier.startHour,
-            otherDuration: earlier.duration,
-            changeoverMin: 15,
-            revert: null,
-        });
-        setBulkSelectedIds(new Set());
-    }
-
-    function confirmLinkPrompt() {
-        if (!linkPrompt) return;
-        // the changeover time is honored exactly - the just-linked job is placed at the precise
-        // computed offset, not snapped to the usual 15-minute grid, so the gap always matches
-        // what was typed to the minute. (Every other job everywhere else in the app still snaps
-        // normally when dragged/resized - this only applies to the position this link sets.)
-        const changeoverMinEntered = Math.max(0, Number(linkPrompt.changeoverMin) || 0);
-        const changeoverHours = changeoverMinEntered / 60;
-        const rawStart = linkPrompt.draggedIsAfter
-            ? linkPrompt.otherStart + linkPrompt.otherDuration + changeoverHours
-            : linkPrompt.otherStart - changeoverHours - linkPrompt.draggedDuration;
-        const newStart = Math.max(0, rawStart);
-        setJobs((js) => js.map((j) => (j.id === linkPrompt.draggedJobId ? { ...j, startHour: newStart, resourceId: linkPrompt.resourceId } : j)));
-        setJobLinks((links) => [
-            ...links.filter((l) => !(l.fromJobId === linkPrompt.fromJobId && l.toJobId === linkPrompt.toJobId)),
-            { id: newId("link"), fromJobId: linkPrompt.fromJobId, toJobId: linkPrompt.toJobId, changeoverMin: changeoverMinEntered },
-        ]);
-        logActivity("job_linked", `${linkPrompt.fromJobName} → ${linkPrompt.toJobName} linked (${changeoverMinEntered}m changeover)`, {
-            fromJobId: linkPrompt.fromJobId,
-            toJobId: linkPrompt.toJobId,
-            changeoverMin: changeoverMinEntered,
-        });
-        setLinkPrompt(null);
-    }
-
-    function cancelLinkPrompt() {
-        if (!linkPrompt) return;
-        if (linkPrompt.revert) {
-            const r = linkPrompt.revert;
-            setJobs((js) => js.map((j) => (j.id === r.jobId ? { ...j, startHour: r.startHour, duration: r.duration, resourceId: r.resourceId } : j)));
-        }
-        setLinkPrompt(null);
-    }
-
     function handlePointerMove(e) {
         const d = dragRef.current;
         if (!d) return;
@@ -1387,53 +1159,30 @@ useEffect(() => {
                 const hw = hourWidthRef.current;
                 const targetRes = resourcesRef.current[rowIndex];
                 let appliedStartHour = null;
-                let appliedDuration = d.origDuration;
                 setJobs((js) => {
                     const job = js.find((j) => j.id === d.jobId);
                     if (!job) return js;
-                    appliedDuration = job.duration;
                     appliedStartHour = Math.max(0, Math.min(TOTAL_HOURS - job.duration, snapHours(localX / hw)));
                     return js.map((j) => (j.id === d.jobId ? { ...j, resourceId: targetRes.id, startHour: appliedStartHour } : j));
                 });
-                if (appliedStartHour != null) {
-                    const overlap = findOverlapOnResource(jobsRef.current, targetRes.id, appliedStartHour, appliedDuration, d.jobId);
-                    if (overlap) {
-                        openChangeoverPrompt(d.jobId, d.jobName, appliedStartHour, appliedDuration, targetRes.id, overlap, {
-                            jobId: d.jobId,
-                            startHour: d.origStart,
-                            duration: d.origDuration,
-                            resourceId: d.origResourceId,
-                        });
-                    } else {
-                        logActivity("job_scheduled", `${d.jobName} scheduled to ${targetRes ? targetRes.name : "resource"}`, {
-                            jobId: d.jobId,
-                            fromResourceId: d.origResourceId,
-                            fromResourceName: "unscheduled",
-                            fromStartHour: d.origStart,
-                            fromDuration: d.origDuration,
-                            toResourceId: targetRes.id,
-                            toResourceName: targetRes.name,
-                            toStartHour: appliedStartHour,
-                            toDuration: d.origDuration,
-                        });
-                        setLastMoveUndo({ jobId: d.jobId, jobName: d.jobName, prevStartHour: d.origStart, prevDuration: d.origDuration, prevResourceId: d.origResourceId });
-                    }
-                }
+                logActivity("job_scheduled", `${d.jobName} scheduled to ${targetRes ? targetRes.name : "resource"}`, {
+                    jobId: d.jobId,
+                    fromResourceId: d.origResourceId,
+                    fromResourceName: "unscheduled",
+                    fromStartHour: d.origStart,
+                    fromDuration: d.origDuration,
+                    toResourceId: targetRes.id,
+                    toResourceName: targetRes.name,
+                    toStartHour: appliedStartHour,
+                    toDuration: d.origDuration,
+                });
+                setLastMoveUndo({ jobId: d.jobId, jobName: d.jobName, prevStartHour: d.origStart, prevDuration: d.origDuration, prevResourceId: d.origResourceId });
             }
             setGhost(null);
         } else if (d && d.mode !== "group-move") {
             const poolRect = poolRef.current?.getBoundingClientRect();
             if (poolRect && e.clientY >= poolRect.top) {
-                let nextJobsSnapshot = null;
-                setJobs((js) => {
-                    const next = js.map((j) => (j.id === d.jobId ? { ...j, resourceId: null } : j));
-                    nextJobsSnapshot = next;
-                    return next;
-                });
-                // becoming unscheduled always breaks any link this job was part of
-                if (nextJobsSnapshot) {
-                    setJobLinks((links) => pruneStaleLinks(nextJobsSnapshot, links));
-                }
+                setJobs((js) => js.map((j) => (j.id === d.jobId ? { ...j, resourceId: null } : j)));
                 if (d.origResourceId) {
                     const fromRes = resourcesRef.current.find((r) => r.id === d.origResourceId);
                     logActivity("job_unscheduled", `${d.jobName} moved back to unscheduled`, {
@@ -1455,29 +1204,6 @@ useEffect(() => {
                 const finalJob = jobsRef.current.find((j) => j.id === d.jobId);
                 if (finalJob && (finalJob.startHour !== d.origStart || finalJob.duration !== d.origDuration || finalJob.resourceId !== d.origResourceId)) {
                     const isResize = d.mode === "resize";
-                    // moving or resizing this job may have pulled it away from a job it was
-                    // linked to (or, for a resize, changed the gap) - re-validate all links
-                    // against the fresh positions now that the drag has committed
-                    setJobLinks((links) => pruneStaleLinks(jobsRef.current, links));
-                    // collision handling (changeover popup) only applies to plain moves - a
-                    // resize that now overlaps a neighbor still just shows as an ordinary
-                    // conflict (red outline), since "grow into the next job" isn't a sequencing
-                    // action the way dragging one job onto another is
-                    if (!isResize) {
-                        const overlap = findOverlapOnResource(jobsRef.current, finalJob.resourceId, finalJob.startHour, finalJob.duration, d.jobId);
-                        if (overlap) {
-                            openChangeoverPrompt(d.jobId, finalJob.name, finalJob.startHour, finalJob.duration, finalJob.resourceId, overlap, {
-                                jobId: d.jobId,
-                                startHour: d.origStart,
-                                duration: d.origDuration,
-                                resourceId: d.origResourceId,
-                            });
-                            dragRef.current = null;
-                            window.removeEventListener("pointermove", handlePointerMove);
-                            window.removeEventListener("pointerup", handlePointerUp);
-                            return;
-                        }
-                    }
                     const fromRes = resourcesRef.current.find((r) => r.id === d.origResourceId);
                     const toRes = resourcesRef.current.find((r) => r.id === finalJob.resourceId);
                     logActivity(isResize ? "job_resized" : "job_moved", `${finalJob.name} ${isResize ? "resized" : "moved"}`, {
@@ -1494,10 +1220,6 @@ useEffect(() => {
                     setLastMoveUndo({ jobId: d.jobId, jobName: finalJob.name, prevStartHour: d.origStart, prevDuration: d.origDuration, prevResourceId: d.origResourceId });
                 }
             }
-        } else if (d && d.mode === "group-move") {
-            // a bulk drag may have moved only one half of a linked pair (if the other job
-            // wasn't part of the selection) - re-check every link against the fresh positions
-            setJobLinks((links) => pruneStaleLinks(jobsRef.current, links));
         }
         dragRef.current = null;
         window.removeEventListener("pointermove", handlePointerMove);
@@ -1582,17 +1304,7 @@ useEffect(() => {
     }
 
     function updateJob(id, patch) {
-        let nextJobsSnapshot = null;
-        setJobs((js) => {
-            const next = js.map((j) => (j.id === id ? { ...j, ...patch } : j));
-            nextJobsSnapshot = next;
-            return next;
-        });
-        // manually retyping a job's start time, duration, or resource in the side panel can
-        // just as easily pull it away from a linked partner as dragging it can
-        if (nextJobsSnapshot && ("startHour" in patch || "duration" in patch || "resourceId" in patch)) {
-            setJobLinks((links) => pruneStaleLinks(nextJobsSnapshot, links));
-        }
+        setJobs((js) => js.map((j) => (j.id === id ? { ...j, ...patch } : j)));
     }
 
     // datetime-local input <-> startHour (hours since baseDate/midnight today) conversions
@@ -1619,7 +1331,6 @@ useEffect(() => {
     function deleteJob(id) {
         const job = jobs.find((j) => j.id === id);
         setJobs((js) => js.filter((j) => j.id !== id));
-        setJobLinks((links) => links.filter((l) => l.fromJobId !== id && l.toJobId !== id));
         setSelectedJobId(null);
         if (job) logActivity("job_deleted", `${job.name} deleted`, { jobId: id });
     }
@@ -1627,13 +1338,11 @@ useEffect(() => {
     function resetDemo() {
         setJobs(cloneJobs());
         setResources(cloneResources());
-        setJobLinks([]);
         setSelectedJobId(null);
         setSelectedResourceId(null);
     }
 
     function autoFixConflicts() {
-        let nextJobsSnapshot = null;
         setJobs((js) => {
             const byResource = {};
             js.forEach((j) => {
@@ -1655,16 +1364,9 @@ useEffect(() => {
                     if (newStart !== job.startHour) updates[job.id] = newStart;
                 });
             });
-            if (Object.keys(updates).length === 0) {
-                nextJobsSnapshot = js;
-                return js;
-            }
-            const next = js.map((j) => (updates[j.id] !== undefined ? { ...j, startHour: updates[j.id] } : j));
-            nextJobsSnapshot = next;
-            return next;
+            if (Object.keys(updates).length === 0) return js;
+            return js.map((j) => (updates[j.id] !== undefined ? { ...j, startHour: updates[j.id] } : j));
         });
-        // the shifted positions don't respect any changeover gap, so re-validate links
-        if (nextJobsSnapshot) setJobLinks((links) => pruneStaleLinks(nextJobsSnapshot, links));
     }
 
     function sanitizeFilename(name) {
@@ -1747,57 +1449,12 @@ useEffect(() => {
             Jobs: t.jobs.length,
             "Estimated (h)": Number(t.estHours.toFixed(2)),
             "Actual (h)": Number((t.actualHours + t.liveHours).toFixed(2)),
-            "Max life (h)": t.maxLife || TOOL_LIFE_HOURS,
-            "Tool life used (%)": Number(Math.min(100, ((t.actualHours + t.liveHours) / (t.maxLife || TOOL_LIFE_HOURS)) * 100).toFixed(0)),
+            "Tool life used (%)": Number(Math.min(100, ((t.actualHours + t.liveHours) / TOOL_LIFE_HOURS) * 100).toFixed(0)),
         }));
         const ws = XLSX.utils.json_to_sheet(rows);
-        ws["!cols"] = [{ wch: 8 }, { wch: 22 }, { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 13 }, { wch: 16 }];
+        ws["!cols"] = [{ wch: 8 }, { wch: 22 }, { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 16 }];
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Tool usage");
-        await saveWorkbook(wb, defaultName);
-    }
-
-    async function exportTodaySummaryExcel() {
-        const today = new Date(baseDate.getTime() + Math.floor(nowHour / 24) * 86400000);
-        const dateStr = today.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-        const defaultName = `daily_summary_${toDateInputValue(today)}`;
-
-        // Sheet 1: overview
-        const overviewRows = [
-            { Metric: "Date", Value: dateStr },
-            { Metric: "Total jobs today", Value: todaySummary.total },
-            { Metric: "Done", Value: todaySummary.done },
-            { Metric: "Running", Value: todaySummary.running },
-            { Metric: "Scheduled (not started)", Value: todaySummary.scheduled },
-            { Metric: "Overdue", Value: todaySummary.overdue },
-            { Metric: "Completed — delayed", Value: todaySummary.delayedCount },
-            { Metric: "Completed — on time", Value: todaySummary.onTimeCount },
-            { Metric: "Completed — early", Value: todaySummary.earlyCount },
-            { Metric: "Avg delay (min)", Value: todaySummary.delayedCount > 0 ? Math.round(todaySummary.avgDelayMin) : "—" },
-            { Metric: "Avg early (min)", Value: todaySummary.earlyCount > 0 ? Math.round(todaySummary.avgEarlyMin) : "—" },
-        ];
-        const ws1 = XLSX.utils.json_to_sheet(overviewRows);
-        ws1["!cols"] = [{ wch: 30 }, { wch: 16 }];
-
-        // Sheet 2: per-job timing
-        const jobRows = todaySummary.completedWithTiming.map((j) => {
-            const res = resources.find((r) => r.id === j.resourceId);
-            return {
-                "Job": j.name,
-                "Product": j.product,
-                "Resource": res ? res.name : "—",
-                "Planned (h)": Number(j.plannedH.toFixed(2)),
-                "Actual (h)": Number(j.actualH.toFixed(2)),
-                "Diff (min)": j.diffMin,
-                "Status": j.status === "delayed" ? "Delayed" : j.status === "early" ? "Early" : "On time",
-            };
-        });
-        const ws2 = XLSX.utils.json_to_sheet(jobRows.length > 0 ? jobRows : [{ Note: "No completed jobs with timing data today" }]);
-        ws2["!cols"] = [{ wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }];
-
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws1, "Overview");
-        XLSX.utils.book_append_sheet(wb, ws2, "Job timing");
         await saveWorkbook(wb, defaultName);
     }
 
@@ -1873,7 +1530,6 @@ useEffect(() => {
     function bulkDeleteSelected() {
         const count = bulkSelectedIds.size;
         setJobs((js) => js.filter((j) => !bulkSelectedIds.has(j.id)));
-        setJobLinks((links) => links.filter((l) => !bulkSelectedIds.has(l.fromJobId) && !bulkSelectedIds.has(l.toJobId)));
         setBulkSelectedIds(new Set());
         if (count > 0) logActivity("job_bulk_deleted", `${count} job${count !== 1 ? "s" : ""} deleted (bulk)`, { count });
     }
@@ -1881,31 +1537,19 @@ useEffect(() => {
     function bulkMoveToResource(resourceId) {
         const count = bulkSelectedIds.size;
         const res = resources.find((r) => r.id === resourceId);
-        let nextJobsSnapshot = null;
-        setJobs((js) => {
-            const next = js.map((j) => (bulkSelectedIds.has(j.id) && !j.locked ? { ...j, resourceId } : j));
-            nextJobsSnapshot = next;
-            return next;
-        });
-        if (nextJobsSnapshot) setJobLinks((links) => pruneStaleLinks(nextJobsSnapshot, links));
+        setJobs((js) => js.map((j) => (bulkSelectedIds.has(j.id) && !j.locked ? { ...j, resourceId } : j)));
         if (count > 0) logActivity("job_bulk_moved", `${count} job${count !== 1 ? "s" : ""} moved to ${res ? res.name : "resource"} (bulk)`, { count, resourceId });
     }
 
     function bulkShiftHours(deltaHours) {
         const count = bulkSelectedIds.size;
-        let nextJobsSnapshot = null;
-        setJobs((js) => {
-            const next = js.map((j) => {
+        setJobs((js) =>
+            js.map((j) => {
                 if (!bulkSelectedIds.has(j.id) || j.locked) return j;
                 const newStart = Math.max(0, Math.min(TOTAL_HOURS - j.duration, snapHours(j.startHour + deltaHours)));
                 return { ...j, startHour: newStart };
-            });
-            nextJobsSnapshot = next;
-            return next;
-        });
-        // shifting only the selected jobs can pull one half of a linked pair away from the
-        // other (if only one of the two was selected) - re-check links against fresh positions
-        if (nextJobsSnapshot) setJobLinks((links) => pruneStaleLinks(nextJobsSnapshot, links));
+            })
+        );
         if (count > 0) logActivity("job_bulk_moved", `${count} job${count !== 1 ? "s" : ""} shifted by ${deltaHours > 0 ? "+" : ""}${deltaHours}h (bulk)`, { count, deltaHours });
     }
 
@@ -1976,13 +1620,7 @@ useEffect(() => {
     function deleteResource(id) {
         const res = resources.find((r) => r.id === id);
         setResources((rs) => rs.filter((r) => r.id !== id));
-        let nextJobsSnapshot = null;
-        setJobs((js) => {
-            const next = js.map((j) => (j.resourceId === id ? { ...j, resourceId: null } : j));
-            nextJobsSnapshot = next;
-            return next;
-        });
-        if (nextJobsSnapshot) setJobLinks((links) => pruneStaleLinks(nextJobsSnapshot, links));
+        setJobs((js) => js.map((j) => (j.resourceId === id ? { ...j, resourceId: null } : j)));
         setSelectedResourceId(null);
         if (res) logActivity("resource_deleted", `${res.name} deleted`, { resourceId: id });
     }
@@ -2033,112 +1671,9 @@ useEffect(() => {
         setAuditLog([]);
     }
 
-    // ---------------------------------------------------------------------------------
-    // Tool-change timeline helpers: a job now carries an ordered `toolChanges` list, each
-    // entry describing "switch to tool X at minute N (relative to the job's own start),
-    // for D minutes". job.tools (the aggregated summary the Tools/Analytics pages read)
-    // is recomputed automatically from toolChanges any time it's edited, so no other page
-    // needs to know about toolChanges at all - they keep reading job.tools like before.
-    // ---------------------------------------------------------------------------------
-    function recomputeAggregatedTools(toolChanges) {
-        const map = new Map();
-        (toolChanges || []).forEach((c) => {
-            const key = (c.toolNumber || "?") + "::" + (c.toolName || "");
-            if (!map.has(key)) {
-                map.set(key, { number: c.toolNumber, name: c.toolName, hours: 0, opCount: 0 });
-            }
-            map.get(key).hours += (Number(c.durationMin) || 0) / 60;
-        });
-        return Array.from(map.values());
-    }
-
-    // furthest point (in hours) any tool-change segment reaches - used to make sure the job's
-    // scheduled duration always covers the full tool-change timeline the user has entered
-    function toolChangesSpanHours(toolChanges) {
-        const maxEndMin = (toolChanges || []).reduce((max, c) => Math.max(max, (Number(c.startMin) || 0) + (Number(c.durationMin) || 0)), 0);
-        return maxEndMin / 60;
-    }
-
-    // grows (never shrinks) a job's duration to fit its tool-change timeline, snapped to the
-    // usual 15-minute grid - called any time a tool-change's start/length is edited
-    function growDurationForToolChanges(job, toolChanges) {
-        const spanHours = toolChangesSpanHours(toolChanges);
-        if (spanHours <= job.duration) return job.duration;
-        return Math.max(SNAP_HOURS, snapHours(spanHours));
-    }
-
-    // builds an initial tool-change list from an NC file's parsed tool list (number/name) so
-    // the person doesn't have to retype which tools are used - only the timing (start/duration)
-    // is left blank for them to fill in themselves, since the NC file's theoretical estimate
-    // isn't reliable enough to assume as the real changeover timing.
-    function toolChangesFromParsedTools(tools) {
-        return (tools || []).map((t) => ({
-            id: newId("tc"),
-            toolNumber: t.number ? `T${t.number}` : "",
-            toolName: t.name || "Tool",
-            startMin: 0,
-            durationMin: 0,
-        }));
-    }
-
-    function addToolChange(jobId) {
-        setJobs((js) => js.map((j) => {
-            if (j.id !== jobId) return j;
-            const changes = j.toolChanges || [];
-            // ต่อจากช่วงล่าสุด ถ้ามี ไม่งั้นเริ่มที่นาที 0
-            const last = changes[changes.length - 1];
-            const nextStart = last ? last.startMin + last.durationMin : 0;
-            const newChange = { id: newId("tc"), toolNumber: "", toolName: "New tool", startMin: nextStart, durationMin: 15 };
-            const nextChanges = [...changes, newChange];
-            return { ...j, toolChanges: nextChanges, tools: recomputeAggregatedTools(nextChanges), duration: growDurationForToolChanges(j, nextChanges) };
-        }));
-    }
-
-    function updateToolChange(jobId, changeId, patch) {
-        setJobs((js) => js.map((j) => {
-            if (j.id !== jobId) return j;
-            const nextChanges = (j.toolChanges || []).map((c) => (c.id === changeId ? { ...c, ...patch } : c));
-            return { ...j, toolChanges: nextChanges, tools: recomputeAggregatedTools(nextChanges), duration: growDurationForToolChanges(j, nextChanges) };
-        }));
-    }
-
-    function removeToolChange(jobId, changeId) {
-        setJobs((js) => js.map((j) => {
-            if (j.id !== jobId) return j;
-            const nextChanges = (j.toolChanges || []).filter((c) => c.id !== changeId);
-            return { ...j, toolChanges: nextChanges, tools: recomputeAggregatedTools(nextChanges) };
-        }));
-    }
-
-    // reorders the tool-change list (drag-and-drop) - times stay attached to each entry as-is,
-    // only the display/aggregation order changes
-    function reorderToolChanges(jobId, fromIdx, toIdx) {
-        setJobs((js) => js.map((j) => {
-            if (j.id !== jobId) return j;
-            const changes = [...(j.toolChanges || [])];
-            if (fromIdx < 0 || fromIdx >= changes.length || toIdx < 0 || toIdx >= changes.length) return j;
-            const [moved] = changes.splice(fromIdx, 1);
-            changes.splice(toIdx, 0, moved);
-            return { ...j, toolChanges: changes, tools: recomputeAggregatedTools(changes) };
-        }));
-    }
-
     const selectedJob = jobs.find((j) => j.id === selectedJobId) || null;
     const selectedResource = resources.find((r) => r.id === selectedResourceId) || null;
     const toolKey = (t) => (t.number || "?") + "::" + t.name;
-
-    function updateToolMaxLife(t, newMaxLife) {
-        const key = (t.number || "?") + "::" + t.name;
-        setToolHistory((prev) => {
-            const existing = prev.find((h) => (h.number || "?") + "::" + h.name === key);
-            if (existing) {
-                return prev.map((h) =>
-                    (h.number || "?") + "::" + h.name === key ? { ...h, maxLife: newMaxLife || null } : h
-                );
-            }
-            return [...prev, { number: t.number, name: t.name, actualHours: 0, jobNames: [], maxLife: newMaxLife || null }];
-        });
-    }
     const selectedTool = (selectedToolKey ? visibleToolSummary.find((t) => toolKey(t) === selectedToolKey) : null) || visibleToolSummary[0] || null;
     const conflictCount = conflictIds.size;
 
@@ -2165,22 +1700,22 @@ useEffect(() => {
     return (
         <div style={styles.appShell}>
             <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
         .ps-scroll::-webkit-scrollbar { height: 10px; width: 10px; }
-        .ps-scroll::-webkit-scrollbar-track { background: #EDEDED; }
-        .ps-scroll::-webkit-scrollbar-thumb { background: #C1C1C1; border-radius: 3px; }
-        .ps-scroll { scrollbar-width: thin; scrollbar-color: #C1C1C1 #EDEDED; }
-        .ps-job:hover { filter: brightness(1.03); box-shadow: 0 4px 12px rgba(38,38,38,0.16) !important; }
-        .ps-chip:hover { box-shadow: 0 4px 12px rgba(27,110,140,0.12); }
+        .ps-scroll::-webkit-scrollbar-track { background: #EEF2F3; }
+        .ps-scroll::-webkit-scrollbar-thumb { background: #C7D5DA; border-radius: 6px; }
+        .ps-scroll { scrollbar-width: thin; scrollbar-color: #C7D5DA #EEF2F3; }
+        .ps-job:hover { filter: brightness(1.03); box-shadow: 0 4px 12px rgba(27,34,38,0.16) !important; }
+        .ps-chip:hover { box-shadow: 0 4px 12px rgba(27,110,134,0.12); }
         .ps-chip:active { cursor: grabbing; }
-        .ps-zoombtn:hover { background: #EDEDED; border-color: #ABABAB; }
-        .ps-addbtn:hover { background: #155A73 !important; }
-        .ps-select, .ps-input { background:#FFFFFF; border:1px solid #C8C8C8; color:#262626; border-radius:10px; padding:7px 9px; font-family:'Segoe UI', 'Inter', sans-serif; font-size:13px; width:100%; box-sizing:border-box; }
-        .ps-select:focus, .ps-input:focus { outline:none; border-color:#1B6E8C; box-shadow:0 0 0 3px rgba(27,110,140,0.14); }
+        .ps-zoombtn:hover { background: #EEF2F3; border-color: #B9CBD1; }
+        .ps-addbtn:hover { background: #234F60 !important; }
+        .ps-select, .ps-input { background:#F2F6F7; border:1px solid #DCE4E7; color:#1B2226; border-radius:10px; padding:7px 9px; font-family:'Inter',sans-serif; font-size:13px; width:100%; box-sizing:border-box; }
+        .ps-select:focus, .ps-input:focus { outline:none; border-color:#2F6E86; box-shadow:0 0 0 3px rgba(47,110,134,0.14); }
         .ps-navbtn { transition: background 0.15s, color 0.15s, transform 0.1s; }
-        .ps-navbtn:hover { background: #D9D9D9 !important; }
+        .ps-navbtn:hover { background: #E4EAEC !important; }
         .ps-navbtn:active { transform: scale(0.98); }
-        .ps-upgradebtn:hover { background: #D9D9D9 !important; }
+        .ps-upgradebtn:hover { background: #E4EAEC !important; }
         .ps-logoutbtn:hover { background: #FDECEB !important; color: #C4372E !important; }
         .ps-sidebar { transition: width 0.22s ease; overflow: hidden; width: 76px; }
         .ps-sidebar .ps-navlabel { opacity: 0; transition: opacity 0.12s ease; white-space: nowrap; }
@@ -2188,8 +1723,8 @@ useEffect(() => {
         .ps-sidebar:hover { width: 210px; box-shadow: 4px 0 16px rgba(0,0,0,0.12); }
         .ps-sidebar:hover .ps-navlabel { opacity: 1; }
         .ps-sidebar:hover .ps-promo { opacity: 1; pointer-events: auto; }
-        .ps-searchitem:hover { background: #EDEDED !important; }
-        .ps-tool-sidebar-item:hover { background: #FFFFFF !important; }
+        .ps-searchitem:hover { background: #EEF2F3 !important; }
+        .ps-tool-sidebar-item:hover { background: #F2F6F7 !important; }
         @keyframes ps-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(0,200,83,0.55); } 50% { box-shadow: 0 0 0 5px rgba(0,200,83,0); } }
         .ps-running-dot { animation: ps-pulse 1.4s ease-in-out infinite; }
         @keyframes ps-job-glow { 0%, 100% { box-shadow: 0 0 0 2px rgba(0,200,83,0.55), 0 3px 12px rgba(0,200,83,0.35); } 50% { box-shadow: 0 0 0 6px rgba(0,200,83,0.16), 0 3px 12px rgba(0,200,83,0.35); } }
@@ -2265,9 +1800,9 @@ useEffect(() => {
                                     onClick={() => setActiveNav(id)}
                                     style={{
                                         ...styles.sidebarBtn,
-                                        background: active ? "#1B6E8C" : "transparent",
-                                        color: active ? "#FFFFFF" : "#404040",
-                                        boxShadow: active ? "0 4px 10px rgba(38,38,38,0.18)" : "none",
+                                        background: active ? "#1B2226" : "transparent",
+                                        color: active ? "#FFFFFF" : "#33424A",
+                                        boxShadow: active ? "0 4px 10px rgba(27,34,38,0.18)" : "none",
                                         fontWeight: active ? 600 : 500,
                                     }}
                                 >
@@ -2280,7 +1815,7 @@ useEffect(() => {
                     <div style={{ flex: 1 }} />
                     <div className="ps-promo" style={styles.sidebarPromo}>
                         <div style={styles.sidebarPromoIcon}>
-                            <AlertTriangle size={18} color="#1B6E8C" />
+                            <AlertTriangle size={18} color="#2F6E86" />
                         </div>
                         <span style={styles.sidebarPromoText}>
                             {conflictCount > 0 ? `${conflictCount} conflict${conflictCount !== 1 ? "s" : ""} need attention` : "All schedules are conflict-free"}
@@ -2329,9 +1864,9 @@ useEffect(() => {
                                                     ...styles.zoomBtn,
                                                     width: "auto",
                                                     padding: "0 10px",
-                                                    background: viewDays === d ? "#1B6E8C" : "#FFFFFF",
-                                                    color: viewDays === d ? "#FFFFFF" : "#1B6E8C",
-                                                    borderColor: viewDays === d ? "#1B6E8C" : "#C8C8C8",
+                                                    background: viewDays === d ? "#2F6E86" : "#F2F6F7",
+                                                    color: viewDays === d ? "#FFFFFF" : "#2F6E86",
+                                                    borderColor: viewDays === d ? "#2F6E86" : "#DCE4E7",
                                                 }}
                                                 onClick={() => setViewDays(d)}
                                             >
@@ -2356,9 +1891,9 @@ useEffect(() => {
                                             gap: 6,
                                             display: "flex",
                                             alignItems: "center",
-                                            background: isFitted ? "#1B6E8C" : "#FFFFFF",
-                                            color: isFitted ? "#FFFFFF" : "#1B6E8C",
-                                            borderColor: isFitted ? "#1B6E8C" : "#C8C8C8",
+                                            background: isFitted ? "#2F6E86" : "#F2F6F7",
+                                            color: isFitted ? "#FFFFFF" : "#2F6E86",
+                                            borderColor: isFitted ? "#2F6E86" : "#DCE4E7",
                                         }}
                                         onClick={fitWeekToView}
                                     >
@@ -2377,7 +1912,7 @@ useEffect(() => {
                                     <button className="ps-zoombtn" style={{ ...styles.zoomBtn, width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center" }} onClick={resetDemo}>
                                         <RotateCcw size={13} /> reset
                                     </button>
-                                    <div style={{ width: 1, height: 20, background: "#C8C8C8" }} />
+                                    <div style={{ width: 1, height: 20, background: "#DCE4E7" }} />
                                     <input
                                         ref={excelFileInputRef}
                                         type="file"
@@ -2409,7 +1944,7 @@ useEffect(() => {
                                     >
                                         <Printer size={13} /> Print / PDF
                                     </button>
-                                    <div style={{ width: 1, height: 20, background: "#C8C8C8" }} />
+                                    <div style={{ width: 1, height: 20, background: "#DCE4E7" }} />
                                     <button
                                         className="ps-zoombtn"
                                         style={styles.zoomBtn}
@@ -2529,38 +2064,38 @@ useEffect(() => {
 
                             <div style={styles.homeStatsGrid}>
                                 <div style={styles.homeStatCard}>
-                                    <div style={{ ...styles.homeStatIcon, background: "#E3F0FB" }}>
-                                        <Boxes size={17} color="#1B6E8C" />
+                                    <div style={{ ...styles.homeStatIcon, background: "#E7EEF1" }}>
+                                        <Boxes size={17} color="#2F6E86" />
                                     </div>
                                     <span style={styles.homeStatValue}>{resources.length}</span>
                                     <span style={styles.homeStatLabel}>resources tracked</span>
                                 </div>
                                 <div style={styles.homeStatCard}>
-                                    <div style={{ ...styles.homeStatIcon, background: "#E3F5E9" }}>
-                                        <CheckCircle2 size={17} color="#21A366" />
+                                    <div style={{ ...styles.homeStatIcon, background: "#E4F5EE" }}>
+                                        <CheckCircle2 size={17} color="#17A2A0" />
                                     </div>
                                     <span style={styles.homeStatValue}>{resources.filter((r) => r.status === "running").length}</span>
                                     <span style={styles.homeStatLabel}>running now</span>
                                 </div>
                                 <div style={styles.homeStatCard}>
-                                    <div style={{ ...styles.homeStatIcon, background: "#EDEDED" }}>
-                                        <ListChecks size={17} color="#404040" />
+                                    <div style={{ ...styles.homeStatIcon, background: "#E9EFF1" }}>
+                                        <ListChecks size={17} color="#33424A" />
                                     </div>
                                     <span style={styles.homeStatValue}>{scheduledJobs.length}</span>
                                     <span style={styles.homeStatLabel}>jobs scheduled</span>
                                 </div>
                                 <div style={styles.homeStatCard}>
-                                    <div style={{ ...styles.homeStatIcon, background: poolJobs.length ? "#FCF0DC" : "#E3F5E9" }}>
-                                        <PauseCircle size={17} color={poolJobs.length ? "#E8A33D" : "#21A366"} />
+                                    <div style={{ ...styles.homeStatIcon, background: poolJobs.length ? "#FCF0DC" : "#E4F5EE" }}>
+                                        <PauseCircle size={17} color={poolJobs.length ? "#E8A33D" : "#17A2A0"} />
                                     </div>
                                     <span style={styles.homeStatValue}>{poolJobs.length}</span>
                                     <span style={styles.homeStatLabel}>waiting to be scheduled</span>
                                 </div>
                                 <div style={styles.homeStatCard}>
-                                    <div style={{ ...styles.homeStatIcon, background: conflictCount ? "#FDECEB" : "#E3F5E9" }}>
-                                        <AlertTriangle size={17} color={conflictCount ? "#F0625B" : "#21A366"} />
+                                    <div style={{ ...styles.homeStatIcon, background: conflictCount ? "#FDECEB" : "#E4F5EE" }}>
+                                        <AlertTriangle size={17} color={conflictCount ? "#F0625B" : "#17A2A0"} />
                                     </div>
-                                    <span style={{ ...styles.homeStatValue, color: conflictCount ? "#C4372E" : "#262626" }}>{conflictCount}</span>
+                                    <span style={{ ...styles.homeStatValue, color: conflictCount ? "#C4372E" : "#1B2226" }}>{conflictCount}</span>
                                     <span style={styles.homeStatLabel}>jobs in conflict</span>
                                 </div>
                                 <div
@@ -2573,10 +2108,10 @@ useEffect(() => {
                                         }
                                     }}
                                 >
-                                    <div style={{ ...styles.homeStatIcon, background: activeAlarms.length ? "#FDECEB" : "#E3F5E9" }}>
-                                        <AlertOctagon size={17} color={activeAlarms.length ? ALARM_RED : "#21A366"} />
+                                    <div style={{ ...styles.homeStatIcon, background: activeAlarms.length ? "#FDECEB" : "#E4F5EE" }}>
+                                        <AlertOctagon size={17} color={activeAlarms.length ? ALARM_RED : "#17A2A0"} />
                                     </div>
-                                    <span style={{ ...styles.homeStatValue, color: activeAlarms.length ? ALARM_RED_DARK : "#262626" }}>{activeAlarms.length}</span>
+                                    <span style={{ ...styles.homeStatValue, color: activeAlarms.length ? ALARM_RED_DARK : "#1B2226" }}>{activeAlarms.length}</span>
                                     <span style={styles.homeStatLabel}>active alarms</span>
                                 </div>
                             </div>
@@ -2589,7 +2124,7 @@ useEffect(() => {
                                     </div>
                                     {jobs.length === 0 ? (
                                         <div style={styles.bottleneckEmpty}>
-                                            <ListChecks size={16} color="#6E6E6E" />
+                                            <ListChecks size={16} color="#7C8A93" />
                                             no jobs yet
                                         </div>
                                     ) : (
@@ -2627,12 +2162,12 @@ useEffect(() => {
 
                                 <div style={styles.analyticsCard}>
                                     <div style={styles.analyticsCardHeader}>
-                                        <Clock size={15} color="#1B6E8C" />
+                                        <Clock size={15} color="#2F6E86" />
                                         <span style={styles.analyticsCardTitle}>Upcoming (next 4h)</span>
                                     </div>
                                     {upcomingJobs.length === 0 ? (
                                         <div style={styles.bottleneckEmpty}>
-                                            <CheckCircle2 size={16} color="#21A366" />
+                                            <CheckCircle2 size={16} color="#17A2A0" />
                                             nothing starting soon
                                         </div>
                                     ) : (
@@ -2662,7 +2197,7 @@ useEffect(() => {
                             <div style={styles.homeBottomGrid}>
                                 <div style={styles.analyticsCard}>
                                     <div style={styles.analyticsCardHeader}>
-                                        <Gauge size={15} color="#1B6E8C" />
+                                        <Gauge size={15} color="#2F6E86" />
                                         <span style={styles.analyticsCardTitle}>Resource status</span>
                                     </div>
                                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -2684,9 +2219,9 @@ useEffect(() => {
                                                     <span
                                                         style={{
                                                             ...styles.bottleneckBadge,
-                                                            background: r.alarmActive ? "#FDECEB" : "#F2F2F2",
+                                                            background: r.alarmActive ? "#FDECEB" : "#F7F9FA",
                                                             color: r.alarmActive ? ALARM_RED_DARK : meta.color,
-                                                            borderColor: r.alarmActive ? "#F7CFCB" : "#C8C8C8",
+                                                            borderColor: r.alarmActive ? "#F7CFCB" : "#DCE4E7",
                                                             marginLeft: "auto",
                                                         }}
                                                     >
@@ -2700,12 +2235,12 @@ useEffect(() => {
 
                                 <div style={styles.analyticsCard}>
                                     <div style={styles.analyticsCardHeader}>
-                                        <ListChecks size={15} color="#404040" />
+                                        <ListChecks size={15} color="#33424A" />
                                         <span style={styles.analyticsCardTitle}>Unscheduled jobs</span>
                                     </div>
                                     {poolJobs.length === 0 ? (
                                         <div style={styles.bottleneckEmpty}>
-                                            <CheckCircle2 size={16} color="#21A366" />
+                                            <CheckCircle2 size={16} color="#17A2A0" />
                                             everything is scheduled
                                         </div>
                                     ) : (
@@ -2726,7 +2261,7 @@ useEffect(() => {
                                                 </div>
                                             ))}
                                             {poolJobs.length > 6 && (
-                                                <div style={{ fontSize: 11, color: "#6E6E6E" }}>+{poolJobs.length - 6} more in schedule view</div>
+                                                <div style={{ fontSize: 11, color: "#7C8A93" }}>+{poolJobs.length - 6} more in schedule view</div>
                                             )}
                                         </div>
                                     )}
@@ -2739,7 +2274,7 @@ useEffect(() => {
                         <>
                             {importError && (
                                 <div style={{ ...styles.qrIntro, margin: "0 18px 0", borderRadius: 0, borderLeft: "none", borderRight: "none" }}>
-                                    <FileSpreadsheet size={14} color="#1B6E8C" />
+                                    <FileSpreadsheet size={14} color="#2F6E86" />
                                     <span>{importError}</span>
                                     <button style={{ ...styles.searchClearBtn, marginLeft: "auto" }} onClick={() => setImportError("")}>
                                         <X size={13} />
@@ -2750,7 +2285,7 @@ useEffect(() => {
                             <div style={styles.filterBar}>
                                 <div style={{ position: "relative" }}>
                                     <div style={styles.searchBox}>
-                                        <Search size={14} color="#6E6E6E" />
+                                        <Search size={14} color="#7C8A93" />
                                         <input
                                             className="ps-searchinput"
                                             placeholder="Search jobs by name..."
@@ -2888,7 +2423,7 @@ useEffect(() => {
                                     </div>
                                 ))}
                                 <div style={styles.legendDivider} />
-                                <div style={{ ...styles.legendItem, color: "#8C8C8C", fontStyle: "italic" }}>
+                                <div style={{ ...styles.legendItem, color: "#9AA7AC", fontStyle: "italic" }}>
                                     ctrl/cmd + click job เพื่อเลือกหลายอัน
                                 </div>
                             </div>
@@ -2914,7 +2449,7 @@ useEffect(() => {
                                             {Array.from({ length: DAYS }).map((_, d) => {
                                                 const date = new Date(baseDate.getTime() + d * 86400000);
                                                 const isToday = d === Math.floor(nowHour / 24);
-                                                const zebraBg = d % 2 === 0 ? "#FFFFFF" : "#EDEDED";
+                                                const zebraBg = d % 2 === 0 ? "#FFFFFF" : "#EEF2F3";
                                                 return (
                                                     <div
                                                         key={d}
@@ -2924,14 +2459,14 @@ useEffect(() => {
                                                             top: 0,
                                                             width: 24 * hourWidth,
                                                             height: 26,
-                                                            borderLeft: "1px solid #BFBFBF",
+                                                            borderLeft: "1px solid #CFDBDF",
                                                             boxSizing: "border-box",
-                                                            background: isToday ? "#D6E8FA" : zebraBg,
+                                                            background: isToday ? "#DCE6E9" : zebraBg,
                                                             display: "flex",
                                                             alignItems: "center",
                                                         }}
                                                     >
-                                                        <span style={{ ...styles.dayLabel, color: isToday ? "#1B6E8C" : "#404040" }}>
+                                                        <span style={{ ...styles.dayLabel, color: isToday ? "#2F6E86" : "#33424A" }}>
                                                             {hourWidth < 14
                                                                 ? date.toLocaleDateString("en-GB", { day: "numeric", month: "short" })
                                                                 : date.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}
@@ -2994,7 +2529,7 @@ useEffect(() => {
                                                                 left: h * hourWidth,
                                                                 top: 26 + SHIFT_BAND_HEIGHT,
                                                                 height: HEADER_HEIGHT - 26 - SHIFT_BAND_HEIGHT,
-                                                                borderLeft: isDayStart ? "1px solid #BFBFBF" : isMajor ? "1px solid #C8C8C8" : "1px solid #E1E1E1",
+                                                                borderLeft: isDayStart ? "1px solid #CFDBDF" : isMajor ? "1px solid #DCE4E7" : "1px solid #E7EDEF",
                                                             }}
                                                         >
                                                             {isMajor && hourWidth >= 16 && (
@@ -3004,7 +2539,7 @@ useEffect(() => {
                                                     );
                                                 })}
                                             {nowHour >= 0 && nowHour <= TOTAL_HOURS && (
-                                                <div style={{ position: "absolute", left: nowHour * hourWidth, top: 0, width: 2, height: HEADER_HEIGHT, background: "linear-gradient(180deg,#1B6E8C,#4FA8C9)", zIndex: 25, borderRadius: 2 }}>
+                                                <div style={{ position: "absolute", left: nowHour * hourWidth, top: 0, width: 2, height: HEADER_HEIGHT, background: "linear-gradient(180deg,#2F6E86,#3E96B8)", zIndex: 25, borderRadius: 2 }}>
                                                     <div style={styles.nowDot} />
                                                 </div>
                                             )}
@@ -3030,7 +2565,7 @@ useEffect(() => {
                                                     style={{
                                                         ...styles.resourceCell,
                                                         cursor: "pointer",
-                                                        background: selectedResourceId === r.id ? "#EDEDED" : "#FFFFFF",
+                                                        background: selectedResourceId === r.id ? "#EEF2F3" : "#FFFFFF",
                                                         borderLeft: r.alarmActive ? `3px solid ${ALARM_RED}` : "3px solid transparent",
                                                     }}
                                                     onPointerDown={(e) => e.stopPropagation()}
@@ -3049,10 +2584,10 @@ useEffect(() => {
                                                         <div style={{ ...styles.utilFill, width: `${utilization[r.id]}%` }} />
                                                     </div>
                                                 </div>
-                                                <div style={{ position: "relative", width: timelineWidth, borderBottom: "1px solid #E1E1E1" }}>
+                                                <div style={{ position: "relative", width: timelineWidth, borderBottom: "1px solid #E7EDEF" }}>
                                                     {Array.from({ length: DAYS }).map((_, d) => {
                                                         const isToday = d === Math.floor(nowHour / 24);
-                                                        const zebraBg = d % 2 === 0 ? "#FFFFFF" : "#F5F5F5";
+                                                        const zebraBg = d % 2 === 0 ? "#FFFFFF" : "#EEF3F4";
                                                         return (
                                                             <div
                                                                 key={d}
@@ -3062,8 +2597,8 @@ useEffect(() => {
                                                                     top: 0,
                                                                     bottom: 0,
                                                                     width: 24 * hourWidth,
-                                                                    borderLeft: "1px solid #C8C8C8",
-                                                                    background: isToday ? "#E9F3FC" : zebraBg,
+                                                                    borderLeft: "1px solid #DCE4E7",
+                                                                    background: isToday ? "#E3ECEE" : zebraBg,
                                                                 }}
                                                             />
                                                         );
@@ -3071,19 +2606,19 @@ useEffect(() => {
                                                     {hourWidth >= 10 &&
                                                         Array.from({ length: TOTAL_HOURS }).map((_, h) =>
                                                             h % 6 === 0 && h % 24 !== 0 ? (
-                                                                <div key={h} style={{ position: "absolute", left: h * hourWidth, top: 0, bottom: 0, borderLeft: "1px dashed #E5E5E5" }} />
+                                                                <div key={h} style={{ position: "absolute", left: h * hourWidth, top: 0, bottom: 0, borderLeft: "1px dashed #E5EBED" }} />
                                                             ) : null
                                                         )}
                                                     {Array.from({ length: DAYS }).flatMap((_, d) =>
                                                         shiftBoundaryHours.map((sh) => (
                                                             <div
                                                                 key={`shiftline-${d}-${sh}`}
-                                                                style={{ position: "absolute", left: (d * 24 + sh) * hourWidth, top: 0, bottom: 0, borderLeft: "1px dashed #B0B0B0" }}
+                                                                style={{ position: "absolute", left: (d * 24 + sh) * hourWidth, top: 0, bottom: 0, borderLeft: "1px dashed #B9C6CC" }}
                                                             />
                                                         ))
                                                     )}
                                                     {nowHour >= 0 && nowHour <= TOTAL_HOURS && (
-                                                        <div style={{ position: "absolute", left: nowHour * hourWidth, top: 0, bottom: 0, width: 2, background: "linear-gradient(180deg,#1B6E8C22,#4FA8C922)" }} />
+                                                        <div style={{ position: "absolute", left: nowHour * hourWidth, top: 0, bottom: 0, width: 2, background: "linear-gradient(180deg,#2F6E8622,#3E96B822)" }} />
                                                     )}
                                                     {(rangeFromDate || rangeToDate) && (() => {
                                                         const fromH = rangeFromDate ? Math.max(0, (rangeFromDate.getTime() - baseDate.getTime()) / 3600000) : 0;
@@ -3126,18 +2661,18 @@ useEffect(() => {
                                                                         position: "absolute",
                                                                         left: job.startHour * hourWidth,
                                                                         width: Math.max(6, job.duration * hourWidth - 2),
-                                                                        top: 5,
-                                                                        height: ROW_HEIGHT - 28,
-background: blocked ? "#FBE4E2" : job.isRunning ? JOB_RUNNING_GREEN : isDone ? "#E3F0FB" : isOverdue ? OVERDUE_AMBER_BG : job.locked ? `${color}22` : `${color}40`,
+                                                                        top: 7,
+                                                                        height: ROW_HEIGHT - 14,
+background: blocked ? "#FBE4E2" : job.isRunning ? JOB_RUNNING_GREEN : isDone ? "#EAF2F4" : isOverdue ? OVERDUE_AMBER_BG : job.locked ? `${color}22` : `${color}40`,
 border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_AMBER_BORDER}` : isConflict ? "1px solid #F0625B" : isDone ? `1px solid ${DONE_BLUE}55` : job.locked ? `1px solid ${color}77` : `1px solid ${color}AA`,
                                                                         borderLeftWidth: 4,
                                                                         borderLeftColor: blocked ? ALARM_RED : isOverdue ? OVERDUE_AMBER_BORDER : isDone ? DONE_BLUE : color,
                                                                         boxShadow: bulkSelected
-                                                                            ? `0 0 0 2px #1B6E8C, 0 0 0 4px rgba(27,110,140,0.25)`
+                                                                            ? `0 0 0 2px #2F6E86, 0 0 0 4px rgba(47,110,134,0.25)`
                                                                             : selected
-                                                                            ? `0 0 0 2px ${color}55, 0 4px 10px rgba(27,110,140,0.12)`
-                                                                            : "0 1px 4px rgba(27,110,140,0.08)",
-                                                                        borderRadius: 3,
+                                                                            ? `0 0 0 2px ${color}55, 0 4px 10px rgba(47,110,134,0.12)`
+                                                                            : "0 1px 4px rgba(47,110,134,0.08)",
+                                                                        borderRadius: 12,
                                                                         cursor: blocked ? "not-allowed" : job.locked ? "pointer" : "grab",
                                                                         overflow: "hidden",
                                                                         userSelect: "none",
@@ -3166,7 +2701,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                                 gap: 4,
                                                                                 fontFamily: "'IBM Plex Mono',monospace",
                                                                                 fontSize: 11,
-                                                                                color: blocked ? ALARM_RED_DARK : job.isRunning ? "#FFFFFF" : "#262626",
+                                                                                color: blocked ? ALARM_RED_DARK : job.isRunning ? "#FFFFFF" : "#1B2226",
                                                                                 whiteSpace: "nowrap",
                                                                                 textShadow: job.isRunning && !blocked ? "0 1px 2px rgba(0,60,20,0.35)" : "none",
                                                                             }}
@@ -3200,12 +2735,12 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                                 OVERDUE
                                                                             </div>
                                                                         ) : (
-                                                                            <div style={{ fontSize: 10, color: "#6E6E6E", whiteSpace: "nowrap" }}>{job.duration}h</div>
+                                                                            <div style={{ fontSize: 10, color: "#7C8A93", whiteSpace: "nowrap" }}>{job.duration}h</div>
                                                                         )}
                                                                     </div>
                                                                     {isConflict && <AlertTriangle size={11} color="#F0625B" style={{ position: "absolute", top: 4, right: 4, zIndex: 2 }} />}
                                                                     {bulkSelected && (
-                                                                        <div style={{ position: "absolute", top: 4, left: 4, zIndex: 3, width: 14, height: 14, borderRadius: "50%", background: "#1B6E8C", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                                                        <div style={{ position: "absolute", top: 4, left: 4, zIndex: 3, width: 14, height: 14, borderRadius: "50%", background: "#2F6E86", display: "flex", alignItems: "center", justifyContent: "center" }}>
                                                                             <CheckCircle2 size={10} color="#FFFFFF" />
                                                                         </div>
                                                                     )}
@@ -3215,110 +2750,6 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                             style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 8, cursor: "ew-resize" }}
                                                                         />
                                                                     )}
-                                                                    {(job.toolChanges || []).length > 0 && (() => {
-                                                                        const totalJobMin = job.duration * 60;
-                                                                        return (
-                                                                            <div style={{ position: "absolute", left: 4, right: 4, bottom: 3, height: 4, borderRadius: 2, background: "rgba(0,0,0,0.08)", overflow: "hidden", pointerEvents: "none" }}
-                                                                                title={`Tool changes: ${(job.toolChanges||[]).length} step${(job.toolChanges||[]).length!==1?"s":""} · ${job.toolChanges.reduce((s,c)=>s+(Number(c.durationMin)||0),0)}min total`}>
-                                                                                {(job.toolChanges||[]).map((c,ci) => {
-                                                                                    const startPct = Math.min(100, ((Number(c.startMin)||0)/totalJobMin)*100);
-                                                                                    const widthPct = Math.min(100-startPct, ((Number(c.durationMin)||0)/totalJobMin)*100);
-                                                                                    if (widthPct <= 0) return null;
-                                                                                    return <div key={c.id||ci} style={{ position:"absolute", left:`${startPct}%`, width:`${widthPct}%`, top:0, bottom:0, background: job.isRunning?"rgba(255,255,255,0.75)":"#E8A33D", borderRadius:2 }} />;
-                                                                                })}
-                                                                            </div>
-                                                                        );
-                                                                    })()}
-                                                                </div>
-                                                            );
-                                                        })}
-                                                    {/* ── Actual-run bars: grey bg at real scan-start, fill = elapsed ── */}
-                                                    {scheduledJobs
-                                                        .filter((j) => j.resourceId === r.id && j.runStartedAt && (j.isRunning || j.completed))
-                                                        .map((job) => {
-                                                            const runStart = new Date(job.runStartedAt);
-                                                            const barStartH = (runStart.getTime() - baseDate.getTime()) / 3600000;
-                                                            if (barStartH < 0) return null;
-                                                            const bgW = Math.max(6, job.duration * hourWidth);
-                                                            const elapsedH = job.isRunning
-                                                                ? Math.max(0, (nowTick - runStart.getTime()) / 3600000)
-                                                                : (job.actualRunHours || 0);
-                                                            const fillW = Math.max(0, elapsedH * hourWidth);
-                                                            const isRunning = !!job.isRunning;
-                                                            const fillColor = isRunning ? "#00C853" : DONE_BLUE;
-                                                            const fillBg   = isRunning ? "rgba(0,200,83,0.82)" : "rgba(27,110,140,0.72)";
-                                                            const elapsedMin = (elapsedH * 60).toFixed(0);
-                                                            return (
-                                                                <div
-                                                                    key={`actual-${job.id}`}
-                                                                    title={isRunning
-                                                                        ? `${job.name} · Running · ${elapsedMin}min elapsed / ${(job.duration*60).toFixed(0)}min planned`
-                                                                        : `${job.name} · Done · ${elapsedMin}min actual / ${(job.duration*60).toFixed(0)}min planned`}
-                                                                    style={{ position: "absolute", left: barStartH * hourWidth, width: bgW, top: ROW_HEIGHT - 20, height: 15, borderRadius: 3, background: "#D4D4D4", border: "1px solid #B0B0B0", borderLeft: "3px solid #909090", overflow: "hidden", pointerEvents: "none", zIndex: 3, boxSizing: "border-box" }}
-                                                                >
-                                                                    <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: Math.min(fillW, bgW), background: fillBg, borderLeft: `3px solid ${fillColor}`, transition: isRunning ? "width 1s linear" : "none" }} />
-                                                                    <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", gap: 3, paddingLeft: 5, zIndex: 1 }}>
-                                                                        {isRunning && <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "#fff", flexShrink: 0, boxShadow: "0 0 0 1px #00C85377" }} />}
-                                                                        <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: fillW > bgW * 0.4 ? "#fff" : "#444", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textShadow: fillW > bgW * 0.4 ? "0 1px 2px rgba(0,0,0,0.35)" : "none" }}>
-                                                                            {job.name}{bgW > 90 ? ` · ${elapsedMin}min` : ""}
-                                                                        </span>
-                                                                    </div>
-                                                                </div>
-                                                            );
-                                                        })}
-                                                    {jobLinks
-                                                        .map((link) => ({ link, fromJ: jobs.find((j) => j.id === link.fromJobId), toJ: jobs.find((j) => j.id === link.toJobId) }))
-                                                        .filter(({ link, fromJ, toJ }) => fromJ && toJ && fromJ.resourceId === r.id && toJ.resourceId === r.id && isLinkStillAdjacent(fromJ, toJ, link))
-                                                        .map(({ link, fromJ, toJ }) => {
-                                                            const x1 = (fromJ.startHour + fromJ.duration) * hourWidth;
-                                                            const x2 = toJ.startHour * hourWidth;
-                                                            const midY = ROW_HEIGHT / 2;
-                                                            if (x2 <= x1) {
-                                                                // jobs got dragged back into overlap after linking - still show a marker
-                                                                // at the "to" job's start so the link isn't silently invisible
-                                                                return (
-                                                                    <div key={link.id} title={`${fromJ.name} → ${toJ.name} · ${link.changeoverMin}m changeover`} style={{ position: "absolute", left: x2 - 8, top: midY - 8, width: 16, height: 16, borderRadius: "50%", background: "#1B6E8C", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 6, pointerEvents: "none" }}>
-                                                                        <Link2 size={9} color="#FFFFFF" />
-                                                                    </div>
-                                                                );
-                                                            }
-                                                            return (
-                                                                <div key={link.id} style={{ position: "absolute", left: x1, top: midY - 1, width: x2 - x1, height: 2, zIndex: 6, pointerEvents: "none" }}>
-                                                                    <div style={{ position: "absolute", inset: 0, borderTop: "2px dashed #1B6E8C" }} />
-                                                                    <div
-                                                                        style={{
-                                                                            position: "absolute",
-                                                                            left: "50%",
-                                                                            top: "50%",
-                                                                            transform: "translate(-50%, -50%)",
-                                                                            display: "flex",
-                                                                            alignItems: "center",
-                                                                            gap: 3,
-                                                                            background: "#1B6E8C",
-                                                                            color: "#FFFFFF",
-                                                                            borderRadius: 8,
-                                                                            padding: "1px 6px",
-                                                                            fontSize: 9,
-                                                                            fontWeight: 700,
-                                                                            fontFamily: "'IBM Plex Mono',monospace",
-                                                                            whiteSpace: "nowrap",
-                                                                        }}
-                                                                        title={`${fromJ.name} → ${toJ.name} · ${link.changeoverMin}m changeover`}
-                                                                    >
-                                                                        <Link2 size={9} /> {link.changeoverMin}m
-                                                                    </div>
-                                                                    <div
-                                                                        style={{
-                                                                            position: "absolute",
-                                                                            right: -1,
-                                                                            top: -3,
-                                                                            width: 0,
-                                                                            height: 0,
-                                                                            borderTop: "4px solid transparent",
-                                                                            borderBottom: "4px solid transparent",
-                                                                            borderLeft: "6px solid #1B6E8C",
-                                                                        }}
-                                                                    />
                                                                 </div>
                                                             );
                                                         })}
@@ -3333,8 +2764,8 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 ref={poolRef}
                                 style={{
                                     ...styles.pool,
-                                    border: isDraggingNC ? "2px dashed #1B6E8C" : "2px dashed transparent",
-                                    background: isDraggingNC ? "#E3F0FB" : styles.pool.background,
+                                    border: isDraggingNC ? "2px dashed #2F6E86" : "2px dashed transparent",
+                                    background: isDraggingNC ? "#EAF2F4" : styles.pool.background,
                                     transition: "background 0.12s ease, border-color 0.12s ease",
                                     boxSizing: "border-box",
                                 }}
@@ -3353,7 +2784,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
                                     <div style={styles.poolLabel}>
                                         unscheduled ({poolJobs.length})
-                                        {isDraggingNC && <span style={{ marginLeft: 8, color: "#1B6E8C", textTransform: "none" }}>วางไฟล์ NC ที่นี่</span>}
+                                        {isDraggingNC && <span style={{ marginLeft: 8, color: "#2F6E86", textTransform: "none" }}>วางไฟล์ NC ที่นี่</span>}
                                     </div>
                                     <div style={{ display: "flex", gap: 8 }}>
                                         <input
@@ -3366,7 +2797,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                         />
                                         <button
                                             className="ps-addbtn"
-                                            style={{ ...styles.addJobBtn, background: "#404040", border: "1px solid #404040", display: "flex", alignItems: "center", gap: 5 }}
+                                            style={{ ...styles.addJobBtn, background: "#33424A", border: "1px solid #33424A", display: "flex", alignItems: "center", gap: 5 }}
                                             onClick={() => ncFileInputRef.current?.click()}
                                             title="เลือกไฟล์ NC เพื่อสร้างงานพร้อมเวลาโดยประมาณ"
                                         >
@@ -3404,15 +2835,15 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                 style={{
                                                     ...styles.chip,
                                                     borderLeft: `4px solid ${job.isRunning ? RUNNING_GREEN : PRODUCTS[job.product]}`,
-                                                    background: job.isRunning ? "#E3F5E9" : "#FFFFFF",
-                                                    boxShadow: selectedJobId === job.id ? `0 0 0 2px ${PRODUCTS[job.product]}55` : job.isRunning ? "0 0 0 1px #A8DDBB" : "0 1px 4px rgba(27,110,140,0.08)",
+                                                    background: job.isRunning ? "#E4F5EE" : "#FFFFFF",
+                                                    boxShadow: selectedJobId === job.id ? `0 0 0 2px ${PRODUCTS[job.product]}55` : job.isRunning ? "0 0 0 1px #B7E3D3" : "0 1px 4px rgba(47,110,134,0.08)",
                                                     opacity: dimmed ? 0.28 : 1,
                                                     filter: dimmed ? "grayscale(0.4)" : "none",
                                                     transition: "opacity 0.15s ease",
                                                 }}
                                             >
-                                                <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, color: "#262626" }}>{job.name}</div>
-                                                <div style={{ fontSize: 10, color: "#6E6E6E" }}>{job.product} · {job.duration}h</div>
+                                                <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, color: "#1B2226" }}>{job.name}</div>
+                                                <div style={{ fontSize: 10, color: "#7C8A93" }}>{job.product} · {job.duration}h</div>
                                                 {job.isRunning && (
                                                     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9.5, fontWeight: 800, color: RUNNING_GREEN_DARK, letterSpacing: "0.05em", marginTop: 2 }}>
                                                         <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 }} />
@@ -3420,12 +2851,12 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                     </div>
                                                 )}
                                                 {job.ncFileName && (
-                                                    <div style={{ fontSize: 9.5, color: "#1B6E8C", marginTop: 2, display: "flex", alignItems: "center", gap: 3 }}>
+                                                    <div style={{ fontSize: 9.5, color: "#2F6E86", marginTop: 2, display: "flex", alignItems: "center", gap: 3 }}>
                                                         <Upload size={9} /> {job.ncSource === "comment" ? "from NC header" : "estimated"}
                                                     </div>
                                                 )}
                                                 {job.tools && job.tools.length > 0 && (
-                                                    <div style={{ fontSize: 9.5, color: "#595959", marginTop: 2, display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap" }}>
+                                                    <div style={{ fontSize: 9.5, color: "#5B6B72", marginTop: 2, display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap" }}>
                                                         <Wrench size={9} />
                                                         {job.tools[0].name}
                                                         {job.tools.length > 1 && ` +${job.tools.length - 1}`}
@@ -3445,7 +2876,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                             <div style={styles.analyticsGrid}>
                                 <div style={styles.analyticsCardWide}>
                                     <div style={styles.analyticsCardHeader}>
-                                        <Gauge size={15} color="#1B6E8C" />
+                                        <Gauge size={15} color="#2F6E86" />
                                         <span style={styles.analyticsCardTitle}>Utilization overview</span>
                                     </div>
                                     <div style={styles.analyticsStatsRow}>
@@ -3458,7 +2889,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                             <span style={styles.analyticsStatLabel}>busiest resource</span>
                                         </div>
                                         <div style={styles.analyticsStat}>
-                                            <span style={{ ...styles.analyticsStatValue, color: analyticsSummary.totalConflictJobs ? "#C4372E" : "#21A366" }}>{analyticsSummary.totalConflictJobs}</span>
+                                            <span style={{ ...styles.analyticsStatValue, color: analyticsSummary.totalConflictJobs ? "#C4372E" : "#17A2A0" }}>{analyticsSummary.totalConflictJobs}</span>
                                             <span style={styles.analyticsStatLabel}>jobs in conflict</span>
                                         </div>
                                     </div>
@@ -3468,7 +2899,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                             .sort((a, b) => (utilization[b.id] || 0) - (utilization[a.id] || 0))
                                             .map((r) => {
                                                 const pct = utilization[r.id] || 0;
-                                                const barColor = pct >= 85 ? "#F0625B" : pct >= 60 ? "#E8A33D" : "#21A366";
+                                                const barColor = pct >= 85 ? "#F0625B" : pct >= 60 ? "#E8A33D" : "#17A2A0";
                                                 return (
                                                     <div
                                                         key={r.id}
@@ -3490,82 +2921,34 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 </div>
 
                                 <div style={styles.analyticsCard}>
-                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                                        <div style={styles.analyticsCardHeader}>
-                                            <ListChecks size={15} color="#1B6E8C" />
-                                            <span style={styles.analyticsCardTitle}>Today's summary</span>
-                                        </div>
-                                        <button
-                                            className="ps-zoombtn"
-                                            title="Export today's summary to Excel"
-                                            onClick={exportTodaySummaryExcel}
-                                            style={{ ...styles.zoomBtn, width: "auto", padding: "0 10px", fontSize: 11, display: "flex", alignItems: "center", gap: 4, color: "#1B6E8C", borderColor: "#1B6E8C" }}
-                                        >
-                                            <FileSpreadsheet size={12} /> Export
-                                        </button>
+                                    <div style={styles.analyticsCardHeader}>
+                                        <AlertOctagon size={15} color="#F0625B" />
+                                        <span style={styles.analyticsCardTitle}>Bottleneck detection</span>
                                     </div>
-
-                                    {/* Job count pills */}
-                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 10 }}>
-                                        {[
-                                            { label: "Total today", value: todaySummary.total, color: "#1B6E8C", bg: "#EBF4F8" },
-                                            { label: "Done", value: todaySummary.done, color: "#21A366", bg: "#E8F6EE" },
-                                            { label: "Running", value: todaySummary.running, color: JOB_RUNNING_GREEN, bg: "#E3F5E9" },
-                                            { label: "Overdue", value: todaySummary.overdue, color: "#C4372E", bg: "#FDECEB" },
-                                        ].map((s) => (
-                                            <div key={s.label} style={{ background: s.bg, borderRadius: 6, padding: "7px 10px", display: "flex", flexDirection: "column", gap: 1 }}>
-                                                <span style={{ fontSize: 20, fontWeight: 700, color: s.color, fontFamily: "'IBM Plex Mono',monospace", lineHeight: 1 }}>{s.value}</span>
-                                                <span style={{ fontSize: 10, color: "#6E6E6E" }}>{s.label}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-
-                                    {/* Completion timing breakdown */}
-                                    <div style={{ fontSize: 11, fontWeight: 600, color: "#595959", marginBottom: 6, paddingTop: 6, borderTop: "1px solid #E5E5E5" }}>
-                                        Completed jobs timing
-                                    </div>
-                                    {todaySummary.completedWithTiming.length === 0 ? (
+                                    {analyticsSummary.bottlenecks.length === 0 ? (
                                         <div style={styles.bottleneckEmpty}>
-                                            <Clock size={14} color="#A0A0A0" />
-                                            no completed jobs with timing data
+                                            <CheckCircle2 size={16} color="#17A2A0" />
+                                            no scheduling conflicts detected
                                         </div>
                                     ) : (
-                                        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                                            {/* summary row */}
-                                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 4 }}>
-                                                {[
-                                                    { label: "On time", value: todaySummary.onTimeCount, color: "#21A366", bg: "#E8F6EE" },
-                                                    { label: "Early", value: todaySummary.earlyCount, color: "#1B6E8C", bg: "#EBF4F8" },
-                                                    { label: "Delayed", value: todaySummary.delayedCount, color: "#C4372E", bg: "#FDECEB" },
-                                                ].map((s) => (
-                                                    <div key={s.label} style={{ background: s.bg, borderRadius: 4, padding: "3px 8px", display: "flex", alignItems: "center", gap: 4 }}>
-                                                        <span style={{ fontSize: 12, fontWeight: 700, color: s.color, fontFamily: "'IBM Plex Mono',monospace" }}>{s.value}</span>
-                                                        <span style={{ fontSize: 10, color: "#6E6E6E" }}>{s.label}</span>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                            {analyticsSummary.bottlenecks.map(({ resource: r, count }, i) => (
+                                                <div
+                                                    key={r.id}
+                                                    style={styles.bottleneckRow}
+                                                    onClick={() => {
+                                                        setSelectedResourceId(r.id);
+                                                        setSelectedJobId(null);
+                                                    }}
+                                                >
+                                                    <span style={styles.bottleneckRank}>#{i + 1}</span>
+                                                    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+                                                        <span style={styles.utilRowName}>{r.name}</span>
+                                                        <span style={styles.resourceType}>{r.type}</span>
                                                     </div>
-                                                ))}
-                                            </div>
-                                            {todaySummary.delayedCount > 0 && (
-                                                <div style={{ fontSize: 10.5, color: "#C4372E" }}>avg delay: <b>{Math.round(todaySummary.avgDelayMin)}min</b></div>
-                                            )}
-                                            {todaySummary.earlyCount > 0 && (
-                                                <div style={{ fontSize: 10.5, color: "#1B6E8C" }}>avg early: <b>{Math.round(todaySummary.avgEarlyMin)}min</b></div>
-                                            )}
-                                            {/* per-job list */}
-                                            <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 4, maxHeight: 180, overflowY: "auto" }}>
-                                                {todaySummary.completedWithTiming.map((j) => (
-                                                    <div key={j.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 6px", borderRadius: 4, background: j.status === "delayed" ? "#FFF5F5" : j.status === "early" ? "#F0F8FF" : "#F5FBF7" }}>
-                                                        <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, fontWeight: 600, color: "#262626", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{j.name}</span>
-                                                        <span style={{ fontSize: 9.5, color: "#8C8C8C", flexShrink: 0 }}>{(j.plannedH * 60).toFixed(0)}m→{(j.actualH * 60).toFixed(0)}m</span>
-                                                        <span style={{
-                                                            fontSize: 9, fontWeight: 700, flexShrink: 0, borderRadius: 3, padding: "1px 5px",
-                                                            color: j.status === "delayed" ? "#C4372E" : j.status === "early" ? "#1B6E8C" : "#21A366",
-                                                            background: j.status === "delayed" ? "#FDECEB" : j.status === "early" ? "#EBF4F8" : "#E8F6EE",
-                                                        }}>
-                                                            {j.status === "delayed" ? `+${j.diffMin}m` : j.status === "early" ? `${j.diffMin}m` : "✓"}
-                                                        </span>
-                                                    </div>
-                                                ))}
-                                            </div>
+                                                    <span style={styles.bottleneckBadge}>{count} conflict{count !== 1 ? "s" : ""}</span>
+                                                </div>
+                                            ))}
                                         </div>
                                     )}
                                 </div>
@@ -3573,7 +2956,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 <div style={styles.analyticsCardWide}>
                                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                                         <div style={styles.analyticsCardHeader}>
-                                            <TrendingUp size={15} color="#4FA8C9" />
+                                            <TrendingUp size={15} color="#3E96B8" />
                                             <span style={styles.analyticsCardTitle}>Gantt summary</span>
                                         </div>
                                         <div style={{ display: "flex", gap: 6 }}>
@@ -3585,9 +2968,9 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                         ...styles.zoomBtn,
                                                         width: "auto",
                                                         padding: "0 12px",
-                                                        background: loadView === v ? "#1B6E8C" : "#FFFFFF",
-                                                        color: loadView === v ? "#FFFFFF" : "#1B6E8C",
-                                                        borderColor: loadView === v ? "#1B6E8C" : "#C8C8C8",
+                                                        background: loadView === v ? "#2F6E86" : "#F2F6F7",
+                                                        color: loadView === v ? "#FFFFFF" : "#2F6E86",
+                                                        borderColor: loadView === v ? "#2F6E86" : "#DCE4E7",
                                                     }}
                                                     onClick={() => setLoadView(v)}
                                                 >
@@ -3624,8 +3007,8 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                 title={`${r.name} · ${hours}h scheduled`}
                                                                 style={{
                                                                     ...styles.heatmapCell,
-                                                                    background: hours === 0 ? "#F5F5F5" : heatColor(intensity),
-                                                                    color: hours === 0 ? "#6E6E6E" : intensity > 0.35 ? "#FFFFFF" : "#262626",
+                                                                    background: hours === 0 ? "#EEF3F4" : heatColor(intensity),
+                                                                    color: hours === 0 ? "#7C8A93" : intensity > 0.35 ? "#FFFFFF" : "#1B2226",
                                                                 }}
                                                             >
                                                                 {hours > 0 ? hours : ""}
@@ -3644,13 +3027,13 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                     <div key={r.id} style={styles.utilRow}>
                                                         <span style={styles.utilRowName}>{r.name}</span>
                                                         <div style={styles.utilRowTrack}>
-                                                            <div style={{ ...styles.utilRowFill, width: `${pct}%`, background: "#4FA8C9" }} />
+                                                            <div style={{ ...styles.utilRowFill, width: `${pct}%`, background: "#3E96B8" }} />
                                                         </div>
                                                         <span style={styles.utilRowPct}>{total}h</span>
                                                     </div>
                                                 );
                                             })}
-                                            <div style={{ fontSize: 11, color: "#6E6E6E", marginTop: 2 }}>
+                                            <div style={{ fontSize: 11, color: "#7C8A93", marginTop: 2 }}>
                                                 showing totals for the current {DAYS}-day scheduling window
                                             </div>
                                         </div>
@@ -3664,7 +3047,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                     </div>
                                     {jobs.length === 0 ? (
                                         <div style={styles.bottleneckEmpty}>
-                                            <ListChecks size={16} color="#6E6E6E" />
+                                            <ListChecks size={16} color="#7C8A93" />
                                             no jobs yet
                                         </div>
                                     ) : (
@@ -3702,12 +3085,12 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
 
                                 <div style={styles.analyticsCard}>
                                     <div style={styles.analyticsCardHeader}>
-                                        <Package size={15} color="#1B6E8C" />
+                                        <Package size={15} color="#2F6E86" />
                                         <span style={styles.analyticsCardTitle}>Product mix</span>
                                     </div>
                                     {productMix.length === 0 ? (
                                         <div style={styles.bottleneckEmpty}>
-                                            <Package size={16} color="#6E6E6E" />
+                                            <Package size={16} color="#7C8A93" />
                                             no jobs yet
                                         </div>
                                     ) : (
@@ -3745,22 +3128,22 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
 
                                 <div style={styles.analyticsCardWide}>
                                     <div style={styles.analyticsCardHeader}>
-                                        <Layers size={15} color="#4FA8C9" />
+                                        <Layers size={15} color="#3E96B8" />
                                         <span style={styles.analyticsCardTitle}>Utilization by resource type</span>
                                     </div>
                                     {resourceTypeUtil.length === 0 ? (
                                         <div style={styles.bottleneckEmpty}>
-                                            <Layers size={16} color="#6E6E6E" />
+                                            <Layers size={16} color="#7C8A93" />
                                             no resources yet
                                         </div>
                                     ) : (
                                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                                             {resourceTypeUtil.map((t) => {
-                                                const barColor = t.avg >= 85 ? "#F0625B" : t.avg >= 60 ? "#E8A33D" : "#21A366";
+                                                const barColor = t.avg >= 85 ? "#F0625B" : t.avg >= 60 ? "#E8A33D" : "#17A2A0";
                                                 return (
                                                     <div key={t.type} style={styles.utilRow}>
                                                         <span style={{ ...styles.utilRowName, width: 130 }}>
-                                                            {t.type} <span style={{ color: "#ABABAB" }}>· {t.count}</span>
+                                                            {t.type} <span style={{ color: "#B7C4C9" }}>· {t.count}</span>
                                                         </span>
                                                         <div style={styles.utilRowTrack}>
                                                             <div style={{ ...styles.utilRowFill, width: `${t.avg}%`, background: barColor }} />
@@ -3781,7 +3164,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                             <div style={{ maxWidth: 1100, margin: "0 auto" }}>
                                 {toolSummary.length === 0 ? (
                                     <div style={styles.bottleneckEmpty}>
-                                        <Wrench size={16} color="#6E6E6E" />
+                                        <Wrench size={16} color="#7C8A93" />
                                         No tool data yet — import an NC file with TOOL comments to see a summary here
                                     </div>
                                 ) : (
@@ -3829,7 +3212,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                         )}
 
                                         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-                                            <label style={{ fontSize: 11.5, color: "#6E6E6E", flexShrink: 0 }}>Filter by job</label>
+                                            <label style={{ fontSize: 11.5, color: "#7C8A93", flexShrink: 0 }}>Filter by job</label>
                                             <select
                                                 className="ps-select"
                                                 style={{ width: "auto", minWidth: 220 }}
@@ -3876,9 +3259,8 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                     const key = toolKey(t);
                                                     const active = selectedTool && toolKey(selectedTool) === key;
                                                     const usedHours = t.actualHours + t.liveHours;
-                                                    const refLife = t.maxLife || TOOL_LIFE_HOURS;
-                                                    const lifePct = Math.min(100, (usedHours / refLife) * 100);
-                                                    const lifeOver = usedHours > refLife;
+                                                    const lifePct = Math.min(100, (usedHours / TOOL_LIFE_HOURS) * 100);
+                                                    const lifeOver = usedHours > TOOL_LIFE_HOURS;
                                                     return (
                                                         <div
                                                             key={key}
@@ -3886,22 +3268,22 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                             onClick={() => setSelectedToolKey(key)}
                                                             style={{
                                                                 ...styles.toolsSidebarItem,
-                                                                background: active ? "#E3F0FB" : "transparent",
+                                                                background: active ? "#EAF2F4" : "transparent",
                                                                 borderLeft: active ? `3px solid ${DONE_BLUE}` : "3px solid transparent",
                                                             }}
                                                         >
-                                                            <Wrench size={13} color={active ? DONE_BLUE : "#6E6E6E"} style={{ flexShrink: 0 }} />
+                                                            <Wrench size={13} color={active ? DONE_BLUE : "#7C8A93"} style={{ flexShrink: 0 }} />
                                                             <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, gap: 3 }}>
-                                                                <span style={{ ...styles.toolsSidebarName, color: active ? "#262626" : "#404040" }}>
+                                                                <span style={{ ...styles.toolsSidebarName, color: active ? "#1B2226" : "#33424A" }}>
                                                                     {t.number ? `T${t.number} · ` : ""}{t.name}
                                                                 </span>
                                                                 <span style={styles.toolsSidebarSub}>{t.jobs.length} job{t.jobs.length !== 1 ? "s" : ""}</span>
-                                                                <div style={{ height: 4, background: "#E1E1E1", borderRadius: 3, overflow: "hidden" }}>
-                                                                    <div style={{ height: "100%", width: `${lifePct}%`, borderRadius: 3, background: lifeOver ? "#F0625B" : lifePct > 75 ? "#E8A33D" : "#21A366" }} />
+                                                                <div style={{ height: 4, background: "#E7EDEF", borderRadius: 3, overflow: "hidden" }}>
+                                                                    <div style={{ height: "100%", width: `${lifePct}%`, borderRadius: 3, background: lifeOver ? "#F0625B" : lifePct > 75 ? "#E8A33D" : "#17A2A0" }} />
                                                                 </div>
                                                             </div>
                                                             {t.liveHours > 0 && <span className="ps-running-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 }} />}
-                                                            <span style={{ ...styles.toolsSidebarHours, color: lifeOver ? "#C4372E" : "#262626" }}>{usedHours.toFixed(1)}h</span>
+                                                            <span style={{ ...styles.toolsSidebarHours, color: lifeOver ? "#C4372E" : "#1B2226" }}>{usedHours.toFixed(1)}h</span>
                                                         </div>
                                                     );
                                                 })}
@@ -3915,13 +3297,12 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                         const usedHours = t.actualHours + t.liveHours;
                                                         const pct = t.estHours > 0 ? Math.min(100, (usedHours / t.estHours) * 100) : 0;
                                                         const overEstimate = t.estHours > 0 && usedHours > t.estHours;
-                                                        const refLife = t.maxLife || TOOL_LIFE_HOURS;
-                                                        const lifePct = Math.min(100, (usedHours / refLife) * 100);
-                                                        const lifeOver = usedHours > refLife;
+                                                        const lifePct = Math.min(100, (usedHours / TOOL_LIFE_HOURS) * 100);
+                                                        const lifeOver = usedHours > TOOL_LIFE_HOURS;
                                                         return (
                                                             <>
                                                                 <div style={styles.qrCardHeader}>
-                                                                    <Wrench size={16} color="#1B6E8C" />
+                                                                    <Wrench size={16} color="#2F6E86" />
                                                                     <span style={{ ...styles.qrJobName, fontSize: 15 }}>{t.number ? `T${t.number} · ` : ""}{t.name}</span>
                                                                     {t.liveHours > 0 && (
                                                                         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: RUNNING_GREEN }}>
@@ -3937,7 +3318,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                         <span style={styles.analyticsStatLabel}>Estimated</span>
                                                                     </div>
                                                                     <div style={styles.analyticsStat}>
-                                                                        <span style={{ ...styles.analyticsStatValue, color: overEstimate ? "#C4372E" : "#262626" }}>{usedHours.toFixed(1)}h</span>
+                                                                        <span style={{ ...styles.analyticsStatValue, color: overEstimate ? "#C4372E" : "#1B2226" }}>{usedHours.toFixed(1)}h</span>
                                                                         <span style={styles.analyticsStatLabel}>Actual used</span>
                                                                     </div>
                                                                     <div style={styles.analyticsStat}>
@@ -3950,40 +3331,35 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                     <div>
                                                                         <label style={styles.fieldLabel}>vs estimate</label>
                                                                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-                                                                            <div style={{ flex: 1, height: 8, background: "#E1E1E1", borderRadius: 2, overflow: "hidden" }}>
+                                                                            <div style={{ flex: 1, height: 8, background: "#E7EDEF", borderRadius: 5, overflow: "hidden" }}>
                                                                                 <div
                                                                                     style={{
                                                                                         height: "100%",
                                                                                         width: `${pct}%`,
-                                                                                        borderRadius: 2,
-                                                                                        background: overEstimate ? "#F0625B" : t.liveHours > 0 ? RUNNING_GREEN : "#21A366",
+                                                                                        borderRadius: 5,
+                                                                                        background: overEstimate ? "#F0625B" : t.liveHours > 0 ? RUNNING_GREEN : "#17A2A0",
                                                                                     }}
                                                                                 />
                                                                             </div>
-                                                                            <span style={{ fontSize: 11, color: "#6E6E6E", flexShrink: 0 }}>{pct.toFixed(0)}%</span>
+                                                                            <span style={{ fontSize: 11, color: "#7C8A93", flexShrink: 0 }}>{pct.toFixed(0)}%</span>
                                                                         </div>
                                                                     </div>
                                                                     <div>
-                                                                        <label style={styles.fieldLabel}>tool life (max {refLife.toFixed(1)}h)</label>
+                                                                        <label style={styles.fieldLabel}>tool life ({TOOL_LIFE_HOURS.toFixed(1)}h ref)</label>
                                                                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-                                                                            <div style={{ flex: 1, height: 8, background: "#E1E1E1", borderRadius: 2, overflow: "hidden" }}>
-                                                                                <div style={{ height: "100%", width: `${lifePct}%`, borderRadius: 2, background: lifeOver ? "#F0625B" : lifePct > 75 ? "#E8A33D" : "#21A366" }} />
+                                                                            <div style={{ flex: 1, height: 8, background: "#E7EDEF", borderRadius: 5, overflow: "hidden" }}>
+                                                                                <div
+                                                                                    style={{
+                                                                                        height: "100%",
+                                                                                        width: `${lifePct}%`,
+                                                                                        borderRadius: 5,
+                                                                                        background: lifeOver ? "#F0625B" : lifePct > 75 ? "#E8A33D" : "#17A2A0",
+                                                                                    }}
+                                                                                />
                                                                             </div>
-                                                                            <span style={{ fontSize: 11, color: lifeOver ? "#C4372E" : "#6E6E6E", fontWeight: lifeOver ? 700 : 400, flexShrink: 0, whiteSpace: "nowrap" }}>
+                                                                            <span style={{ fontSize: 11, color: lifeOver ? "#C4372E" : "#7C8A93", fontWeight: lifeOver ? 700 : 400, flexShrink: 0, whiteSpace: "nowrap" }}>
                                                                                 {lifePct.toFixed(0)}%{lifeOver ? " — replace" : ""}
                                                                             </span>
-                                                                        </div>
-                                                                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                                                                            <label style={{ ...styles.fieldLabel, marginBottom: 0, flexShrink: 0 }}>Set max life (h):</label>
-                                                                            <input
-                                                                                type="number" min="0.1" step="0.5"
-                                                                                defaultValue={t.maxLife || TOOL_LIFE_HOURS}
-                                                                                key={toolKey(t)}
-                                                                                style={{ width: 72, fontSize: 12, padding: "3px 6px", border: "1px solid #C8C8C8", borderRadius: 4, background: "#FAFAFA" }}
-                                                                                onBlur={(e) => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) updateToolMaxLife(t, val); }}
-                                                                                onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                                                                            />
-                                                                            <span style={{ fontSize: 11, color: "#8C8C8C" }}>hours</span>
                                                                         </div>
                                                                     </div>
                                                                 </div>
@@ -4000,7 +3376,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                                 if (found) jumpToJob(found);
                                                                             }}
                                                                         >
-                                                                            <span style={{ ...styles.legendDot, background: PRODUCTS[jobs.find((jj) => jj.id === j.id)?.product] || "#6E6E6E" }} />
+                                                                            <span style={{ ...styles.legendDot, background: PRODUCTS[jobs.find((jj) => jj.id === j.id)?.product] || "#7C8A93" }} />
                                                                             <span style={styles.toolRowName}>{j.name}</span>
                                                                             <span style={styles.toolRowHours}>
                                                                                 {(j.actualHours + j.liveHours) >= 0.1 ? `${(j.actualHours + j.liveHours).toFixed(1)}h` : "<0.1h"} / {j.estHours.toFixed(1)}h
@@ -4008,12 +3384,12 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                         </div>
                                                                     ))}
                                                                     {t.jobs.length === 0 && t.historicalJobNames.length > 0 && (
-                                                                        <div style={{ fontSize: 10.5, color: "#6E6E6E", padding: "4px 8px" }}>
+                                                                        <div style={{ fontSize: 10.5, color: "#7C8A93", padding: "4px 8px" }}>
                                                                             Previously used in (deleted): {t.historicalJobNames.join(", ")}
                                                                         </div>
                                                                     )}
                                                                     {t.jobs.length === 0 && t.historicalJobNames.length === 0 && (
-                                                                        <div style={{ fontSize: 10.5, color: "#6E6E6E", padding: "4px 8px" }}>No jobs currently use this tool</div>
+                                                                        <div style={{ fontSize: 10.5, color: "#7C8A93", padding: "4px 8px" }}>No jobs currently use this tool</div>
                                                                     )}
                                                                 </div>
                                                             </>
@@ -4026,7 +3402,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
 
                                             <div style={styles.analyticsCard}>
                                                 <div style={styles.analyticsCardHeader}>
-                                                    <BarChart3 size={15} color="#4FA8C9" />
+                                                    <BarChart3 size={15} color="#3E96B8" />
                                                     <span style={styles.analyticsCardTitle}>Top tools by actual usage</span>
                                                 </div>
                                                 <div style={styles.barChartWrap} className="ps-scroll">
@@ -4035,7 +3411,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                         return topToolsByUsage.map((t) => {
                                                             const key = toolKey(t);
                                                             const heightPct = Math.max(2, (t.usedHours / maxHours) * 100);
-                                                            const over = t.usedHours > (t.maxLife || TOOL_LIFE_HOURS);
+                                                            const over = t.usedHours > TOOL_LIFE_HOURS;
                                                             const active = selectedTool && toolKey(selectedTool) === key;
                                                             return (
                                                                 <div
@@ -4050,7 +3426,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                             style={{
                                                                                 ...styles.barChartFill,
                                                                                 height: `${heightPct}%`,
-                                                                                background: over ? "#F0625B" : "#4FA8C9",
+                                                                                background: over ? "#F0625B" : "#3E96B8",
                                                                                 boxShadow: active ? `0 0 0 2px ${DONE_BLUE}55` : "none",
                                                                             }}
                                                                         />
@@ -4076,48 +3452,10 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                     {activeNav === "qrcodes" && (
                         <div className="ps-scroll" style={styles.analyticsWrap}>
                             <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-
-                                {/* ── STEP 1: Machine bind QR ─────────────────────────────── */}
-                                <div style={{ ...styles.qrIntro, background: "#EFF6FF", borderColor: "#BFDBFE" }}>
-                                    <Cpu size={16} color="#1D4ED8" />
-                                    <span style={{ color: "#1D4ED8" }}>
-                                        <b>ขั้นที่ 1</b> — สแกน QR เครื่องก่อน เพื่อ "ล็อก" ว่ากำลังทำงานที่เครื่องไหน แล้วค่อยสแกน QR งาน
-                                    </span>
-                                </div>
-                                <div style={styles.qrGrid}>
-                                    {resources.map((r) => {
-                                        const origin = typeof window !== "undefined" ? window.location.origin : "";
-                                        const bindUrl = `${origin}/?bind=resource&resource=${r.id}`;
-                                        const bindImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(bindUrl)}`;
-                                        const meta = STATUS_META[r.status];
-                                        return (
-                                            <div key={r.id} style={{ ...styles.qrCard, borderColor: "#BFDBFE" }}>
-                                                <div style={styles.qrCardHeader}>
-                                                    <meta.Icon size={13} color="#1D4ED8" />
-                                                    <span style={styles.qrJobName}>{r.name}</span>
-                                                </div>
-                                                <div style={styles.qrResourceName}>{r.type}</div>
-                                                <div style={styles.qrImages}>
-                                                    <div style={styles.qrImageBlock}>
-                                                        <img src={bindImg} alt={`bind ${r.name}`} style={styles.qrImage} />
-                                                        <div style={{ ...styles.qrLabel, color: "#1D4ED8" }}>
-                                                            <Cpu size={11} /> BIND
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                    {resources.length === 0 && (
-                                        <div style={styles.bottleneckEmpty}>ยังไม่มีเครื่องจักรในระบบ</div>
-                                    )}
-                                </div>
-
-                                {/* ── STEP 2: Job QR ──────────────────────────────────────── */}
-                                <div style={{ ...styles.qrIntro, marginTop: 24 }}>
-                                    <QrCode size={16} color="#1B6E8C" />
+                                <div style={styles.qrIntro}>
+                                    <QrCode size={16} color="#2F6E86" />
                                     <span>
-                                        <b>ขั้นที่ 2</b> — สแกน START เพื่อเริ่มงาน / STOP เพื่อหยุดงาน — ระบบจะตรวจว่างานตรงกับเครื่องที่เลือกไว้หรือไม่
+                                        สแกน START เพื่อเริ่มงาน สแกน STOP เพื่อหยุดงาน — ปริ้นแปะไว้หน้างานจริงได้เลย
                                     </span>
                                 </div>
                                 <div style={styles.qrGrid}>
@@ -4139,7 +3477,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                 <div style={styles.qrImages}>
                                                     <div style={styles.qrImageBlock}>
                                                         <img src={startImg} alt={`start ${job.name}`} style={styles.qrImage} />
-                                                        <div style={{ ...styles.qrLabel, color: "#21A366" }}>
+                                                        <div style={{ ...styles.qrLabel, color: "#17A2A0" }}>
                                                             <Play size={11} /> START
                                                         </div>
                                                     </div>
@@ -4189,7 +3527,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                     </div>
                                                     <div style={styles.qrImageBlock}>
                                                         <img src={clearImg} alt={`clear ${r.name}`} style={styles.qrImage} />
-                                                        <div style={{ ...styles.qrLabel, color: "#21A366" }}>
+                                                        <div style={{ ...styles.qrLabel, color: "#17A2A0" }}>
                                                             <CheckCircle2 size={11} /> CLEAR
                                                         </div>
                                                     </div>
@@ -4212,7 +3550,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                                         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                             <div style={styles.shiftIntroIcon}>
-                                                <Clock size={14} color="#1B6E8C" />
+                                                <Clock size={14} color="#2F6E86" />
                                             </div>
                                             <div style={styles.shiftIntroTitle}>Shift Settings</div>
                                         </div>
@@ -4265,11 +3603,11 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                     <span style={styles.shiftStatLabel}>Covered</span>
                                                 </div>
                                                 <div style={styles.shiftStatItem}>
-                                                    <span style={{ ...styles.shiftStatValue, color: shiftCoverage.gapHours > 0 ? OVERDUE_AMBER : "#262626" }}>{shiftCoverage.gapHours.toFixed(1)}h</span>
+                                                    <span style={{ ...styles.shiftStatValue, color: shiftCoverage.gapHours > 0 ? OVERDUE_AMBER : "#1B2226" }}>{shiftCoverage.gapHours.toFixed(1)}h</span>
                                                     <span style={styles.shiftStatLabel}>Gap</span>
                                                 </div>
                                                 <div style={styles.shiftStatItem}>
-                                                    <span style={{ ...styles.shiftStatValue, color: shiftCoverage.overlapHours > 0 ? "#C4372E" : "#262626" }}>{shiftCoverage.overlapHours.toFixed(1)}h</span>
+                                                    <span style={{ ...styles.shiftStatValue, color: shiftCoverage.overlapHours > 0 ? "#C4372E" : "#1B2226" }}>{shiftCoverage.overlapHours.toFixed(1)}h</span>
                                                     <span style={styles.shiftStatLabel}>Overlap</span>
                                                 </div>
                                             </div>
@@ -4279,8 +3617,8 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
 
                                 {shiftConfig.length === 0 && (
                                     <div style={styles.shiftEmptyState}>
-                                        <Clock size={20} color="#6E6E6E" />
-                                        <div style={{ fontSize: 12.5, color: "#404040", fontWeight: 600 }}>No shifts yet</div>
+                                        <Clock size={20} color="#7C8A93" />
+                                        <div style={{ fontSize: 12.5, color: "#33424A", fontWeight: 600 }}>No shifts yet</div>
                                     </div>
                                 )}
 
@@ -4322,7 +3660,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                         value={hourToTimeInput(s.start)}
                                                         onChange={(e) => updateShift(s.id, { start: timeInputToHour(e.target.value) })}
                                                     />
-                                                    <ArrowRight size={12} color="#ABABAB" style={{ flexShrink: 0 }} />
+                                                    <ArrowRight size={12} color="#B7C4C9" style={{ flexShrink: 0 }} />
                                                     <input
                                                         type="time"
                                                         className="ps-input"
@@ -4357,7 +3695,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
 
                                                 <div style={styles.shiftBreaksSection}>
                                                     <div style={styles.shiftBreaksHeader}>
-                                                        <Coffee size={12} color="#6E6E6E" />
+                                                        <Coffee size={12} color="#7C8A93" />
                                                         <span style={styles.shiftBreaksLabel}>Breaks ({s.breaks.length})</span>
                                                         <button style={styles.shiftAddBreakBtn} onClick={() => addBreak(s.id)}>
                                                             <Plus size={11} /> Add break
@@ -4383,7 +3721,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                         value={hourToTimeInput(b.start)}
                                                                         onChange={(e) => updateBreak(s.id, b.id, { start: timeInputToHour(e.target.value) })}
                                                                     />
-                                                                    <span style={{ color: "#ABABAB", fontSize: 11 }}>–</span>
+                                                                    <span style={{ color: "#B7C4C9", fontSize: 11 }}>–</span>
                                                                     <input
                                                                         type="time"
                                                                         className="ps-input"
@@ -4411,7 +3749,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                         <div className="ps-scroll" style={styles.analyticsWrap}>
                             <div style={{ maxWidth: 900, margin: "0 auto" }}>
                                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-                                    <div style={{ fontSize: 12.5, color: "#595959" }}>
+                                    <div style={{ fontSize: 12.5, color: "#5B6B72" }}>
                                         {auditLog.length} recent event{auditLog.length !== 1 ? "s" : ""} · tap any row for details
                                     </div>
                                     {auditLog.length > 0 && (
@@ -4435,7 +3773,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
 
                                 {auditLog.length === 0 ? (
                                     <div style={styles.bottleneckEmpty}>
-                                        <HistoryIcon size={16} color="#6E6E6E" />
+                                        <HistoryIcon size={16} color="#7C8A93" />
                                         No activity recorded yet
                                     </div>
                                 ) : (
@@ -4458,7 +3796,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                             <span style={styles.historySummary}>{entry.summary}</span>
                                                             <span style={styles.historyActor}>{entry.actor}</span>
                                                             <span style={styles.historyTime}>{relativeTime(entry.at)}</span>
-                                                            <ChevronRight size={13} color="#ABABAB" style={{ flexShrink: 0, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.12s ease" }} />
+                                                            <ChevronRight size={13} color="#B7C4C9" style={{ flexShrink: 0, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.12s ease" }} />
                                                         </div>
                                                         {isOpen && renderHistoryDetail(entry)}
                                                     </div>
@@ -4480,12 +3818,12 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 pointerEvents: "none",
                                 background: "#FFFFFF",
                                 border: `1px solid ${ghost.color}`,
-                                borderRadius: 3,
+                                borderRadius: 12,
                                 padding: "6px 10px",
                                 fontFamily: "'IBM Plex Mono',monospace",
                                 fontSize: 11.5,
-                                color: "#262626",
-                                boxShadow: "0 8px 20px rgba(27,110,140,0.25)",
+                                color: "#1B2226",
+                                boxShadow: "0 8px 20px rgba(47,110,134,0.25)",
                             }}
                         >
                             {ghost.name}
@@ -4526,16 +3864,6 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                     <option key={r.id} value={r.id}>{r.name}</option>
                                 ))}
                             </select>
-                            {bulkSelectedIds.size === 2 && (
-                                <button
-                                    style={{ ...styles.bulkBarBtn, opacity: canManualLinkSelection() ? 1 : 0.4, cursor: canManualLinkSelection() ? "pointer" : "not-allowed" }}
-                                    onClick={openManualLinkPrompt}
-                                    disabled={!canManualLinkSelection()}
-                                    title={canManualLinkSelection() ? "Link these two jobs with a changeover time" : "Both jobs must be scheduled on the same resource to link"}
-                                >
-                                    <Link2 size={12} /> link
-                                </button>
-                            )}
                             <button
                                 style={styles.bulkBarDeleteBtn}
                                 onClick={() =>
@@ -4559,7 +3887,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                     {selectedJob && (
                         <div style={styles.panel}>
                             <div style={styles.panelHeader}>
-                                <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, color: "#262626" }}>{selectedJob.name}</span>
+                                <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, color: "#1B2226" }}>{selectedJob.name}</span>
                                 <button style={styles.panelClose} onClick={() => setSelectedJobId(null)}>
                                     <X size={15} />
                                 </button>
@@ -4619,7 +3947,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                         value={startHourToLocalInputValue(selectedJob.startHour)}
                                         onChange={(e) => handleStartTimeInputChange(selectedJob, e.target.value)}
                                     />
-                                    <div style={{ fontSize: 11.5, color: "#6E6E6E", marginTop: 4, fontFamily: "'IBM Plex Mono',monospace" }}>
+                                    <div style={{ fontSize: 11.5, color: "#7C8A93", marginTop: 4, fontFamily: "'IBM Plex Mono',monospace" }}>
                                         starts {new Date(baseDate.getTime() + selectedJob.startHour * 3600000).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                                     </div>
                                 </>
@@ -4630,93 +3958,23 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 locked (cannot be dragged)
                             </label>
 
-                            <div style={{ marginTop: 14 }}>
-                                <label style={styles.fieldLabel}>Tool change sequence ({(selectedJob.toolChanges || []).length})</label>
-                                {(selectedJob.toolChanges || []).length > 0 && (
-                                    <div style={styles.toolSpanNote}>
-                                        Tool time total: {toolChangesSpanHours(selectedJob.toolChanges).toFixed(2)}h · Job duration: {selectedJob.duration.toFixed(2)}h
+                            {selectedJob.tools && selectedJob.tools.length > 0 && (
+                                <div style={{ marginTop: 14 }}>
+                                    <label style={styles.fieldLabel}>tools used ({selectedJob.tools.length})</label>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                        {selectedJob.tools.map((t, i) => (
+                                            <div key={i} style={styles.toolRow}>
+                                                <Wrench size={11} color="#5B6B72" style={{ flexShrink: 0 }} />
+                                                <span style={styles.toolRowName}>{t.number ? `T${t.number}` : ""} {t.name}</span>
+                                                <span style={styles.toolRowHours}>
+                                                    {t.actualHours > 0 ? `${t.actualHours.toFixed(1)}h / ` : ""}
+                                                    {t.hours >= 0.1 ? `${t.hours.toFixed(1)}h` : "<0.1h"}
+                                                </span>
+                                            </div>
+                                        ))}
                                     </div>
-                                )}
-                                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                                    {(selectedJob.toolChanges || []).map((c, idx) => (
-                                        <div
-                                            key={c.id}
-                                            draggable
-                                            onDragStart={(e) => {
-                                                setDraggedToolChangeIdx(idx);
-                                                e.dataTransfer.effectAllowed = "move";
-                                            }}
-                                            onDragOver={(e) => e.preventDefault()}
-                                            onDrop={(e) => {
-                                                e.preventDefault();
-                                                if (draggedToolChangeIdx !== null && draggedToolChangeIdx !== idx) {
-                                                    reorderToolChanges(selectedJob.id, draggedToolChangeIdx, idx);
-                                                }
-                                                setDraggedToolChangeIdx(null);
-                                            }}
-                                            onDragEnd={() => setDraggedToolChangeIdx(null)}
-                                            style={{
-                                                ...styles.toolEditCard,
-                                                opacity: draggedToolChangeIdx === idx ? 0.4 : 1,
-                                                borderColor: draggedToolChangeIdx !== null && draggedToolChangeIdx !== idx ? "#1B6E8C55" : styles.toolEditCard.border,
-                                            }}
-                                        >
-                                            <div style={styles.toolEditHeaderRow}>
-                                                <Move size={12} color="#ABABAB" style={{ cursor: "grab", flexShrink: 0 }} title="Drag to reorder" />
-                                                <span style={styles.toolChangeIndex}>#{idx + 1}</span>
-                                                <input
-                                                    className="ps-input"
-                                                    style={styles.toolNumberInput}
-                                                    placeholder="Tool #"
-                                                    value={c.toolNumber || ""}
-                                                    onChange={(e) => updateToolChange(selectedJob.id, c.id, { toolNumber: e.target.value })}
-                                                />
-                                                <input
-                                                    className="ps-input"
-                                                    style={styles.toolNameInput}
-                                                    placeholder="Tool name"
-                                                    value={c.toolName || ""}
-                                                    onChange={(e) => updateToolChange(selectedJob.id, c.id, { toolName: e.target.value })}
-                                                />
-                                                <button style={styles.panelClose} onClick={() => removeToolChange(selectedJob.id, c.id)} title="Delete">
-                                                    <Trash2 size={13} color="#C4372E" />
-                                                </button>
-                                            </div>
-                                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
-                                                <span style={styles.segmentFieldLabel}>Start (min)</span>
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    step={1}
-                                                    className="ps-input"
-                                                    style={styles.shiftBreakTimeInput}
-                                                    value={c.startMin}
-                                                    onChange={(e) => updateToolChange(selectedJob.id, c.id, { startMin: e.target.value })}
-                                                    onBlur={() => updateToolChange(selectedJob.id, c.id, { startMin: Math.max(0, Number(c.startMin) || 0) })}
-                                                />
-                                                <span style={styles.segmentFieldLabel}>Duration (min)</span>
-                                                <input
-                                                    type="number"
-                                                    min={1}
-                                                    step={1}
-                                                    className="ps-input"
-                                                    style={styles.shiftBreakTimeInput}
-                                                    value={c.durationMin}
-                                                    onChange={(e) => updateToolChange(selectedJob.id, c.id, { durationMin: e.target.value })}
-                                                    onBlur={() => updateToolChange(selectedJob.id, c.id, { durationMin: Math.max(1, Number(c.durationMin) || 1) })}
-                                                />
-                                            </div>
-                                        </div>
-                                    ))}
-                                    <button
-                                        className="ps-addbtn"
-                                        style={{ ...styles.addJobBtn, marginBottom: 0, display: "flex", alignItems: "center", gap: 5, width: "100%", justifyContent: "center" }}
-                                        onClick={() => addToolChange(selectedJob.id)}
-                                    >
-                                        <Plus size={12} /> Add tool change
-                                    </button>
                                 </div>
-                            </div>
+                            )}
 
                             {selectedJob.isRunning && (
                                 <div style={styles.runningNote}>
@@ -4726,7 +3984,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                             )}
 
                             {!selectedJob.isRunning && selectedJob.completed && (
-                                <div style={{ ...styles.runningNote, color: DONE_BLUE, background: "#E3F0FB", border: `1px solid ${DONE_BLUE}55` }}>
+                                <div style={{ ...styles.runningNote, color: DONE_BLUE, background: "#EAF2F4", border: `1px solid ${DONE_BLUE}55` }}>
                                     <CheckCircle2 size={13} style={{ marginRight: 6, flexShrink: 0 }} />
                                     งานนี้เสร็จแล้ว{selectedJob.actualRunHours ? ` — ใช้เวลาจริง ${selectedJob.actualRunHours.toFixed(1)}h` : ""}
                                 </div>
@@ -4774,7 +4032,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                     {selectedResource && (
                         <div style={styles.panel}>
                             <div style={styles.panelHeader}>
-                                <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, color: "#262626" }}>{selectedResource.name}</span>
+                                <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, color: "#1B2226" }}>{selectedResource.name}</span>
                                 <button style={styles.panelClose} onClick={() => setSelectedResourceId(null)}>
                                     <X size={15} />
                                 </button>
@@ -4804,7 +4062,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 ))}
                             </select>
 
-                            <div style={{ fontSize: 11.5, color: "#6E6E6E", marginTop: 4, fontFamily: "'IBM Plex Mono',monospace" }}>
+                            <div style={{ fontSize: 11.5, color: "#7C8A93", marginTop: 4, fontFamily: "'IBM Plex Mono',monospace" }}>
                                 {utilization[selectedResource.id]}% booked this week
                             </div>
 
@@ -4815,7 +4073,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                     {ALARM_REASONS.find((a) => a.id === selectedResource.alarmReason)?.label || "แจ้งเตือน"}
                                 </div>
                             ) : (
-                                <div style={{ fontSize: 11.5, color: "#6E6E6E" }}>ไม่มีการแจ้งเตือน</div>
+                                <div style={{ fontSize: 11.5, color: "#7C8A93" }}>ไม่มีการแจ้งเตือน</div>
                             )}
 
                             {!selectedResource.alarmActive && (
@@ -4889,54 +4147,16 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                 </div>
             )}
 
-            {linkPrompt && (
-                <div style={styles.confirmOverlay} onClick={cancelLinkPrompt}>
-                    <div style={styles.confirmCard} onClick={(e) => e.stopPropagation()}>
-                        <div style={styles.confirmTitle}>{linkPrompt.reason === "manual" ? "Link these jobs" : "Jobs collide"}</div>
-                        <div style={styles.confirmMessage}>
-                            {linkPrompt.reason === "manual"
-                                ? `Enter a changeover time and "${linkPrompt.toJobName}" will be moved to start right after "${linkPrompt.fromJobName}" ends.`
-                                : `"${linkPrompt.fromJobName}" and "${linkPrompt.toJobName}" now overlap on this resource. Enter a changeover time and they'll be linked back-to-back instead.`}
-                        </div>
-                        <div style={styles.linkPromptRow}>
-                            <span style={styles.linkPromptJobName}>{linkPrompt.fromJobName}</span>
-                            <ArrowRight size={14} color="#ABABAB" style={{ flexShrink: 0 }} />
-                            <span style={styles.linkPromptJobName}>{linkPrompt.toJobName}</span>
-                        </div>
-                        <label style={styles.fieldLabel}>Changeover time (minutes)</label>
-                        <input
-                            className="ps-input"
-                            type="number"
-                            min={0}
-                            step={1}
-                            autoFocus
-                            value={linkPrompt.changeoverMin}
-                            onChange={(e) => setLinkPrompt((lp) => (lp ? { ...lp, changeoverMin: e.target.value } : lp))}
-                            onBlur={() => setLinkPrompt((lp) => (lp ? { ...lp, changeoverMin: Math.max(0, Number(lp.changeoverMin) || 0) } : lp))}
-                        />
-                        <div style={styles.linkPromptHint}>The job is placed at exactly this gap - no rounding to the schedule grid</div>
-                        <div style={styles.confirmBtnRow}>
-                            <button style={styles.confirmCancelBtn} onClick={cancelLinkPrompt}>
-                                {linkPrompt.revert ? "Cancel (revert)" : "Cancel"}
-                            </button>
-                            <button style={styles.confirmOkBtn} onClick={confirmLinkPrompt}>
-                                Link jobs
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
             <div className="ps-print-only">
-                <div style={{ fontFamily: "'Segoe UI', sans-serif", fontSize: 18, fontWeight: 700, marginBottom: 2 }}>Production Schedule Report</div>
-                <div style={{ fontFamily: "'Segoe UI', 'Inter', sans-serif", fontSize: 11, color: "#595959", marginBottom: 16 }}>
+                <div style={{ fontFamily: "'Poppins',sans-serif", fontSize: 18, fontWeight: 700, marginBottom: 2 }}>Production Schedule Report</div>
+                <div style={{ fontFamily: "'Inter',sans-serif", fontSize: 11, color: "#5B6B72", marginBottom: 16 }}>
                     {DAYS}-day window from {baseDate.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} · generated {new Date().toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
                 </div>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "'Segoe UI', 'Inter', sans-serif", fontSize: 11 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "'Inter',sans-serif", fontSize: 11 }}>
                     <thead>
                         <tr>
                             {["Job", "Product", "Resource", "Start", "End", "Duration", "Status"].map((h) => (
-                                <th key={h} style={{ textAlign: "left", borderBottom: "2px solid #262626", padding: "6px 8px", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                                <th key={h} style={{ textAlign: "left", borderBottom: "2px solid #1B2226", padding: "6px 8px", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em" }}>
                                     {h}
                                 </th>
                             ))}
@@ -4957,13 +4177,13 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 const status = j.isRunning ? "Running" : j.completed ? "Done" : conflictIds.has(j.id) ? "Conflict" : !j.resourceId ? "Unscheduled" : "Scheduled";
                                 return (
                                     <tr key={j.id}>
-                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #C8C8C8", fontFamily: "'IBM Plex Mono',monospace" }}>{j.name}</td>
-                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #C8C8C8" }}>{j.product}</td>
-                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #C8C8C8" }}>{res ? res.name : "—"}</td>
-                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #C8C8C8" }}>{start ? start.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
-                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #C8C8C8" }}>{end ? end.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
-                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #C8C8C8" }}>{j.duration}h</td>
-                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #C8C8C8" }}>{status}</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7", fontFamily: "'IBM Plex Mono',monospace" }}>{j.name}</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{j.product}</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{res ? res.name : "—"}</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{start ? start.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{end ? end.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{j.duration}h</td>
+                                        <td style={{ padding: "5px 8px", borderBottom: "1px solid #DCE4E7" }}>{status}</td>
                                     </tr>
                                 );
                             })}
@@ -4995,12 +4215,12 @@ const styles = {
     sidebar: {
         height: "100%",
         flexShrink: 0,
-        background: "#EDEDED",
+        background: "#EEF2F3",
         display: "flex",
         flexDirection: "column",
         padding: "22px 14px",
         boxSizing: "border-box",
-        borderRight: "1px solid #C8C8C8",
+        borderRight: "1px solid #DCE4E7",
         zIndex: 70,
         position: "absolute",
         left: 0,
@@ -5011,18 +4231,18 @@ const styles = {
     sidebarLogo: {
         width: 32,
         height: 32,
-        borderRadius: 3,
-        background: "#262626",
+        borderRadius: 9,
+        background: "#1B2226",
         color: "#FFFFFF",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        fontFamily: "'Segoe UI', sans-serif",
+        fontFamily: "'Poppins',sans-serif",
         fontWeight: 700,
         fontSize: 11.5,
         flexShrink: 0,
     },
-    sidebarBrandText: { fontFamily: "'Segoe UI', sans-serif", fontWeight: 700, fontSize: 15, color: "#262626", letterSpacing: "0.01em" },
+    sidebarBrandText: { fontFamily: "'Poppins',sans-serif", fontWeight: 700, fontSize: 15, color: "#1B2226", letterSpacing: "0.01em" },
     sidebarNavGroup: {
         display: "flex",
         flexDirection: "column",
@@ -5034,20 +4254,20 @@ const styles = {
         gap: 11,
         width: "100%",
         height: 40,
-        borderRadius: 3,
+        borderRadius: 12,
         border: "none",
         padding: "0 12px",
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
         fontSize: 13,
         textAlign: "left",
     },
     sidebarBtnLabel: { whiteSpace: "nowrap" },
     sidebarPromo: {
         marginTop: 18,
-        background: "linear-gradient(160deg, #1B6E8C 0%, #155A73 100%)",
-        border: "1px solid #0F4557",
-        borderRadius: 4,
+        background: "linear-gradient(160deg, #2F6E86 0%, #234F60 100%)",
+        border: "1px solid #1D3B49",
+        borderRadius: 18,
         padding: "16px 14px",
         display: "flex",
         flexDirection: "column",
@@ -5057,46 +4277,46 @@ const styles = {
     sidebarPromoIcon: {
         width: 34,
         height: 34,
-        borderRadius: 3,
+        borderRadius: 10,
         background: "#FFFFFF",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
     },
-    sidebarPromoText: { fontSize: 12, color: "#EDEDED", lineHeight: 1.4 },
+    sidebarPromoText: { fontSize: 12, color: "#E9EFF1", lineHeight: 1.4 },
     sidebarPromoBtn: {
         width: "100%",
-        background: "#262626",
+        background: "#1B2226",
         color: "#FFFFFF",
         border: "none",
-        borderRadius: 3,
+        borderRadius: 10,
         padding: "8px 0",
         fontSize: 12,
         fontWeight: 600,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
     },
-    sidebarLogoutWrap: { marginTop: 10, paddingTop: 10, borderTop: "1px solid #C8C8C8" },
+    sidebarLogoutWrap: { marginTop: 10, paddingTop: 10, borderTop: "1px solid #DCE4E7" },
     sidebarLogoutBtn: {
         display: "flex",
         alignItems: "center",
         gap: 11,
         width: "100%",
         height: 40,
-        borderRadius: 3,
+        borderRadius: 12,
         border: "none",
         padding: "0 12px",
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
         fontSize: 13,
         textAlign: "left",
         background: "transparent",
-        color: "#6E6E6E",
+        color: "#7C8A93",
     },
     app: {
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
-        background: "#F2F2F2",
-        color: "#262626",
+        fontFamily: "'Inter', sans-serif",
+        background: "#F7F9FA",
+        color: "#1B2226",
         overflow: "hidden",
         position: "relative",
         display: "flex",
@@ -5112,13 +4332,13 @@ const styles = {
         justifyContent: "space-between",
         alignItems: "center",
         padding: "14px 18px",
-        borderBottom: "1px solid #D9D9D9",
+        borderBottom: "1px solid #E4EAEC",
         background: "#FFFFFF",
         flexWrap: "wrap",
         gap: 10,
     },
-    appTitle: { fontSize: 14, fontWeight: 600, letterSpacing: "0.01em", color: "#262626", fontFamily: "'Segoe UI', sans-serif" },
-    appSub: { fontSize: 11.5, color: "#6E6E6E", fontFamily: "'IBM Plex Mono',monospace" },
+    appTitle: { fontSize: 14, fontWeight: 600, letterSpacing: "0.01em", color: "#1B2226", fontFamily: "'Poppins',sans-serif" },
+    appSub: { fontSize: 11.5, color: "#7C8A93", fontFamily: "'IBM Plex Mono',monospace" },
     conflictBadge: {
         display: "flex",
         alignItems: "center",
@@ -5126,7 +4346,7 @@ const styles = {
         color: "#B45309",
         background: "#FCF0DC",
         border: "1px solid #F3DDAE",
-        borderRadius: 4,
+        borderRadius: 20,
         padding: "4px 10px",
         fontFamily: "'IBM Plex Mono',monospace",
     },
@@ -5140,13 +4360,13 @@ const styles = {
         justifyContent: "center",
         width: 32,
         height: 32,
-        background: "#262626",
+        background: "#1B2226",
         color: "#FFFFFF",
         border: "none",
         borderRadius: "50%",
         padding: 0,
         cursor: "pointer",
-        boxShadow: "0 6px 16px rgba(38,38,38,0.3)",
+        boxShadow: "0 6px 16px rgba(27,34,38,0.3)",
         opacity: 0.85,
     },
     islandRow: {
@@ -5173,7 +4393,7 @@ const styles = {
         width: "fit-content",
         maxWidth: "calc(50% - 5px)",
         padding: "6px 10px",
-        borderRadius: 4,
+        borderRadius: 20,
         background: "linear-gradient(135deg, #00D65E 0%, #00A844 100%)",
         flexWrap: "nowrap",
         pointerEvents: "auto",
@@ -5185,12 +4405,12 @@ const styles = {
         fontSize: 10.5,
         fontWeight: 700,
         color: "#FFFFFF",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
         whiteSpace: "nowrap",
         flexShrink: 0,
         background: "rgba(255,255,255,0.2)",
         padding: "5px 9px 5px 7px",
-        borderRadius: 4,
+        borderRadius: 16,
     },
     statusBarStrip: {
         display: "flex",
@@ -5207,16 +4427,16 @@ const styles = {
         flexShrink: 0,
         background: "#FFFFFF",
         border: "none",
-        borderRadius: 4,
+        borderRadius: 16,
         padding: "4px 9px",
         cursor: "pointer",
         boxShadow: "0 2px 6px rgba(0,40,15,0.2)",
         transition: "box-shadow 0.15s ease, transform 0.15s ease",
     },
     statusChipDot: { width: 6, height: 6, borderRadius: "50%", background: "#00A844", flexShrink: 0 },
-    statusChipResource: { fontSize: 11.5, fontWeight: 700, color: "#262626", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap", cursor: "pointer" },
-    statusChipSep: { color: "#ABABAB", fontSize: 11 },
-    statusChipJob: { fontSize: 11, color: "#595959", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
+    statusChipResource: { fontSize: 11.5, fontWeight: 700, color: "#1B2226", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap", cursor: "pointer" },
+    statusChipSep: { color: "#B7C4C9", fontSize: 11 },
+    statusChipJob: { fontSize: 11, color: "#5B6B72", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
     alarmBar: {
         display: "flex",
         alignItems: "center",
@@ -5225,7 +4445,7 @@ const styles = {
         maxWidth: "calc(50% - 5px)",
         marginLeft: "auto",
         padding: "6px 10px",
-        borderRadius: 4,
+        borderRadius: 20,
         background: "linear-gradient(135deg, #FF3B2E 0%, #D6180A 100%)",
         flexWrap: "nowrap",
         pointerEvents: "auto",
@@ -5237,12 +4457,12 @@ const styles = {
         fontSize: 10.5,
         fontWeight: 700,
         color: "#FFFFFF",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
         whiteSpace: "nowrap",
         flexShrink: 0,
         background: "rgba(255,255,255,0.2)",
         padding: "5px 9px 5px 7px",
-        borderRadius: 4,
+        borderRadius: 16,
     },
     alarmChip: {
         display: "flex",
@@ -5251,7 +4471,7 @@ const styles = {
         flexShrink: 0,
         background: "#FFFFFF",
         border: "none",
-        borderRadius: 4,
+        borderRadius: 16,
         padding: "4px 5px 4px 9px",
         boxShadow: "0 2px 6px rgba(60,10,5,0.2)",
         transition: "box-shadow 0.15s ease, transform 0.15s ease",
@@ -5296,12 +4516,12 @@ const styles = {
         border: "none",
         background: "#FFFFFF",
         color: "#B23218",
-        borderRadius: 4,
+        borderRadius: 14,
         padding: "4px 9px",
         fontSize: 10.5,
         fontWeight: 700,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
         whiteSpace: "nowrap",
     },
     alarmActiveNote: {
@@ -5311,7 +4531,7 @@ const styles = {
         color: ALARM_RED_DARK,
         background: "#FDECEB",
         border: "1px solid #F7CFCB",
-        borderRadius: 4,
+        borderRadius: 16,
         padding: "8px 10px",
     },
     alarmRaiseBtn: {
@@ -5322,12 +4542,12 @@ const styles = {
         background: ALARM_RED,
         color: "#FFFFFF",
         border: "none",
-        borderRadius: 3,
+        borderRadius: 10,
         padding: "8px 10px",
         fontSize: 11.5,
         fontWeight: 600,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
     },
     alarmClearBtn: {
         flex: 1,
@@ -5335,44 +4555,44 @@ const styles = {
         alignItems: "center",
         justifyContent: "center",
         background: "none",
-        border: "1px solid #A8DDBB",
-        color: "#187A3E",
-        borderRadius: 3,
+        border: "1px solid #B7E3D3",
+        color: "#0F6E56",
+        borderRadius: 10,
         padding: "8px 10px",
         fontSize: 11.5,
         fontWeight: 600,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
     },
     qrAlarmBadge: {
         marginLeft: "auto",
         fontSize: 10,
         color: ALARM_RED_DARK,
         background: "#FDECEB",
-        borderRadius: 4,
+        borderRadius: 20,
         padding: "2px 8px",
         fontFamily: "'IBM Plex Mono',monospace",
     },
     viewDaysGroup: {
         display: "flex",
         gap: 4,
-        background: "#FFFFFF",
-        border: "1px solid #C8C8C8",
-        borderRadius: 4,
+        background: "#F2F6F7",
+        border: "1px solid #DCE4E7",
+        borderRadius: 16,
         padding: 3,
     },
     zoomBtn: {
         width: 28,
         height: 28,
-        background: "#FFFFFF",
-        border: "1px solid #C8C8C8",
-        color: "#1B6E8C",
-        borderRadius: 4,
+        background: "#F2F6F7",
+        border: "1px solid #DCE4E7",
+        color: "#2F6E86",
+        borderRadius: 14,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
         fontSize: 11.5,
     },
     filterBar: {
@@ -5380,7 +4600,7 @@ const styles = {
         alignItems: "center",
         gap: 10,
         padding: "10px 18px",
-        borderBottom: "1px solid #D9D9D9",
+        borderBottom: "1px solid #E4EAEC",
         background: "#FFFFFF",
         flexWrap: "wrap",
     },
@@ -5388,9 +4608,9 @@ const styles = {
         display: "flex",
         alignItems: "center",
         gap: 6,
-        background: "#FFFFFF",
-        border: "1px solid #C8C8C8",
-        borderRadius: 3,
+        background: "#F2F6F7",
+        border: "1px solid #DCE4E7",
+        borderRadius: 10,
         padding: "6px 10px",
         minWidth: 220,
         flex: "0 1 260px",
@@ -5400,15 +4620,15 @@ const styles = {
         outline: "none",
         background: "transparent",
         fontSize: 12.5,
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
-        color: "#262626",
+        fontFamily: "'Inter',sans-serif",
+        color: "#1B2226",
         flex: 1,
         minWidth: 0,
     },
     searchClearBtn: {
         border: "none",
         background: "transparent",
-        color: "#6E6E6E",
+        color: "#7C8A93",
         cursor: "pointer",
         display: "flex",
         alignItems: "center",
@@ -5422,28 +4642,28 @@ const styles = {
         maxHeight: 280,
         overflowY: "auto",
         background: "#FFFFFF",
-        border: "1px solid #C8C8C8",
-        borderRadius: 3,
-        boxShadow: "0 10px 28px rgba(38,38,38,0.14)",
+        border: "1px solid #DCE4E7",
+        borderRadius: 12,
+        boxShadow: "0 10px 28px rgba(27,34,38,0.14)",
         zIndex: 80,
         padding: 6,
     },
-    searchDropdownEmpty: { fontSize: 12, color: "#6E6E6E", padding: "10px 8px" },
+    searchDropdownEmpty: { fontSize: 12, color: "#7C8A93", padding: "10px 8px" },
     searchDropdownItem: {
         display: "flex",
         alignItems: "center",
         gap: 8,
         padding: "8px 9px",
-        borderRadius: 3,
+        borderRadius: 8,
         cursor: "pointer",
     },
-    searchDropdownName: { fontSize: 12.5, fontFamily: "'IBM Plex Mono',monospace", color: "#262626", flexShrink: 0 },
-    searchDropdownMeta: { fontSize: 11, color: "#6E6E6E", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+    searchDropdownName: { fontSize: 12.5, fontFamily: "'IBM Plex Mono',monospace", color: "#1B2226", flexShrink: 0 },
+    searchDropdownMeta: { fontSize: 11, color: "#7C8A93", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
     searchDropdownLoc: {
         fontSize: 10.5,
-        color: "#1B6E8C",
-        background: "#E3F0FB",
-        borderRadius: 4,
+        color: "#2F6E86",
+        background: "#E7EEF1",
+        borderRadius: 20,
         padding: "2px 8px",
         flexShrink: 0,
         whiteSpace: "nowrap",
@@ -5466,21 +4686,21 @@ const styles = {
         fontSize: 12,
         padding: "6px 8px",
     },
-    dateRangeSep: { color: "#6E6E6E", fontSize: 12 },
+    dateRangeSep: { color: "#7C8A93", fontSize: 12 },
     filterClearBtn: {
         background: "none",
-        border: "1px solid #C8C8C8",
-        color: "#595959",
-        borderRadius: 3,
+        border: "1px solid #DCE4E7",
+        color: "#5B6B72",
+        borderRadius: 8,
         padding: "6px 12px",
         fontSize: 12,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
         whiteSpace: "nowrap",
     },
     filterCount: {
         fontSize: 11.5,
-        color: "#1B6E8C",
+        color: "#2F6E86",
         fontFamily: "'IBM Plex Mono',monospace",
         whiteSpace: "nowrap",
         marginLeft: "auto",
@@ -5490,46 +4710,46 @@ const styles = {
         alignItems: "center",
         gap: 16,
         padding: "10px 18px",
-        borderBottom: "1px solid #D9D9D9",
-        background: "#F5F5F5",
+        borderBottom: "1px solid #E4EAEC",
+        background: "#F4F7F8",
         fontSize: 11,
-        color: "#595959",
+        color: "#5B6B72",
         flexWrap: "wrap",
     },
     legendItem: { display: "flex", alignItems: "center", gap: 5 },
     legendDot: { width: 8, height: 8, borderRadius: "50%", display: "inline-block" },
-    legendDivider: { width: 1, height: 12, background: "#C8C8C8" },
+    legendDivider: { width: 1, height: 12, background: "#DCE4E7" },
     scrollArea: { overflow: "auto", flex: 1, minHeight: 0, position: "relative" },
     analyticsWrap: { overflow: "auto", flex: 1, minHeight: 0, padding: "18px" },
     homeWrap: { overflow: "auto", flex: 1, minHeight: 0, padding: "18px" },
     homeGreetingCard: {
         maxWidth: 1100,
         margin: "0 auto 16px",
-        background: "linear-gradient(135deg, #1B6E8C 0%, #155A73 100%)",
-        borderRadius: 4,
+        background: "linear-gradient(135deg, #2F6E86 0%, #234F60 100%)",
+        borderRadius: 18,
         padding: "22px 24px",
         display: "flex",
         flexWrap: "wrap",
         alignItems: "center",
         justifyContent: "space-between",
         gap: 16,
-        boxShadow: "0 6px 18px rgba(21,90,115,0.25)",
+        boxShadow: "0 6px 18px rgba(35,79,96,0.25)",
     },
-    homeGreetingTitle: { fontSize: 19, fontWeight: 700, color: "#FFFFFF", fontFamily: "'Segoe UI', sans-serif", marginBottom: 4 },
-    homeGreetingSub: { fontSize: 12.5, color: "#E3F0FB", maxWidth: 420, lineHeight: 1.5 },
+    homeGreetingTitle: { fontSize: 19, fontWeight: 700, color: "#FFFFFF", fontFamily: "'Poppins',sans-serif", marginBottom: 4 },
+    homeGreetingSub: { fontSize: 12.5, color: "#DCEAEF", maxWidth: 420, lineHeight: 1.5 },
     homePrimaryBtn: {
         display: "flex",
         alignItems: "center",
         gap: 6,
-        background: "#262626",
+        background: "#1B2226",
         color: "#FFFFFF",
         border: "none",
-        borderRadius: 3,
+        borderRadius: 10,
         padding: "10px 16px",
         fontSize: 12.5,
         fontWeight: 600,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
     },
     homeSecondaryBtn: {
         display: "flex",
@@ -5538,12 +4758,12 @@ const styles = {
         background: "rgba(255,255,255,0.14)",
         color: "#FFFFFF",
         border: "1px solid rgba(255,255,255,0.35)",
-        borderRadius: 3,
+        borderRadius: 10,
         padding: "10px 16px",
         fontSize: 12.5,
         fontWeight: 600,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
     },
     homeStatsGrid: {
         maxWidth: 1100,
@@ -5554,25 +4774,25 @@ const styles = {
     },
     homeStatCard: {
         background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
-        borderRadius: 4,
+        border: "1px solid #E4EAEC",
+        borderRadius: 14,
         padding: "14px 16px",
         display: "flex",
         flexDirection: "column",
         gap: 6,
-        boxShadow: "0 1px 4px rgba(38,38,38,0.05)",
+        boxShadow: "0 1px 4px rgba(27,34,38,0.05)",
     },
     homeStatIcon: {
         width: 32,
         height: 32,
-        borderRadius: 3,
+        borderRadius: 9,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         marginBottom: 2,
     },
-    homeStatValue: { fontSize: 21, fontWeight: 700, color: "#262626", fontFamily: "'Segoe UI', sans-serif" },
-    homeStatLabel: { fontSize: 11, color: "#6E6E6E" },
+    homeStatValue: { fontSize: 21, fontWeight: 700, color: "#1B2226", fontFamily: "'Poppins',sans-serif" },
+    homeStatLabel: { fontSize: 11, color: "#7C8A93" },
     homeMidGrid: {
         maxWidth: 1100,
         margin: "0 auto 16px",
@@ -5592,9 +4812,9 @@ const styles = {
         alignItems: "center",
         gap: 10,
         padding: "8px 10px",
-        borderRadius: 3,
+        borderRadius: 10,
         cursor: "pointer",
-        background: "#F2F2F2",
+        background: "#F7F9FA",
     },
     analyticsGrid: {
         display: "grid",
@@ -5605,99 +4825,99 @@ const styles = {
     },
     analyticsCard: {
         background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
-        borderRadius: 3,
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
         padding: "16px 18px",
-        boxShadow: "0 1px 4px rgba(27,110,140,0.06)",
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
         boxSizing: "border-box",
     },
     analyticsCardWide: {
         background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
-        borderRadius: 3,
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
         padding: "16px 18px",
-        boxShadow: "0 1px 4px rgba(27,110,140,0.06)",
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
         boxSizing: "border-box",
         gridColumn: "1 / -1",
     },
     analyticsCardHeader: { display: "flex", alignItems: "center", gap: 7, marginBottom: 14 },
-    analyticsCardTitle: { fontSize: 13, fontWeight: 600, color: "#262626", fontFamily: "'Segoe UI', sans-serif" },
+    analyticsCardTitle: { fontSize: 13, fontWeight: 600, color: "#1B2226", fontFamily: "'Poppins',sans-serif" },
     analyticsStatsRow: { display: "flex", gap: 22, marginBottom: 16, flexWrap: "wrap" },
     analyticsStat: { display: "flex", flexDirection: "column", gap: 2 },
-    analyticsStatValue: { fontSize: 20, fontWeight: 600, color: "#262626", fontFamily: "'Segoe UI', sans-serif" },
-    analyticsStatLabel: { fontSize: 10.5, color: "#6E6E6E", textTransform: "uppercase", letterSpacing: "0.05em" },
+    analyticsStatValue: { fontSize: 20, fontWeight: 600, color: "#1B2226", fontFamily: "'Poppins',sans-serif" },
+    analyticsStatLabel: { fontSize: 10.5, color: "#7C8A93", textTransform: "uppercase", letterSpacing: "0.05em" },
     utilRow: { display: "flex", alignItems: "center", gap: 10, cursor: "pointer" },
     utilRowName: { fontSize: 12, fontFamily: "'IBM Plex Mono',monospace", width: 78, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-    utilRowTrack: { flex: 1, height: 8, background: "#E1E1E1", borderRadius: 2, overflow: "hidden" },
-    utilRowFill: { height: "100%", borderRadius: 2 },
-    utilRowPct: { fontSize: 11.5, color: "#595959", width: 36, textAlign: "right", flexShrink: 0, fontFamily: "'IBM Plex Mono',monospace" },
-    bottleneckEmpty: { display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#595959", padding: "8px 0" },
+    utilRowTrack: { flex: 1, height: 8, background: "#E7EDEF", borderRadius: 5, overflow: "hidden" },
+    utilRowFill: { height: "100%", borderRadius: 5 },
+    utilRowPct: { fontSize: 11.5, color: "#5B6B72", width: 36, textAlign: "right", flexShrink: 0, fontFamily: "'IBM Plex Mono',monospace" },
+    bottleneckEmpty: { display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#5B6B72", padding: "8px 0" },
     historyRow: {
         display: "flex",
         alignItems: "center",
         gap: 10,
         padding: "8px 10px",
-        borderRadius: 3,
+        borderRadius: 10,
         background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
+        border: "1px solid #E4EAEC",
         cursor: "pointer",
     },
     historyRowOpen: {
-        borderColor: "#ABABAB",
+        borderColor: "#B9CBD1",
         borderBottomLeftRadius: 0,
         borderBottomRightRadius: 0,
     },
     historyDetailInline: {
-        background: "#F2F2F2",
-        border: "1px solid #ABABAB",
+        background: "#F7F9FA",
+        border: "1px solid #B9CBD1",
         borderTop: "none",
-        borderBottomLeftRadius: 3,
-        borderBottomRightRadius: 3,
+        borderBottomLeftRadius: 10,
+        borderBottomRightRadius: 10,
         padding: "10px 12px 12px",
     },
     historyIconWrap: {
         width: 26,
         height: 26,
-        borderRadius: 3,
+        borderRadius: 8,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
     },
-    historySummary: { fontSize: 12.5, color: "#262626", flex: 1, minWidth: 0 },
-    historyTime: { fontSize: 10.5, color: "#8C8C8C", fontFamily: "'IBM Plex Mono',monospace", flexShrink: 0, whiteSpace: "nowrap" },
+    historySummary: { fontSize: 12.5, color: "#1B2226", flex: 1, minWidth: 0 },
+    historyTime: { fontSize: 10.5, color: "#9AA7AC", fontFamily: "'IBM Plex Mono',monospace", flexShrink: 0, whiteSpace: "nowrap" },
     historyActor: {
         fontSize: 10.5,
-        color: "#1B6E8C",
-        background: "#E3F0FB",
-        borderRadius: 4,
+        color: "#2F6E86",
+        background: "#E7EEF1",
+        borderRadius: 20,
         padding: "2px 8px",
         flexShrink: 0,
         whiteSpace: "nowrap",
     },
-    historyDetailMeta: { fontSize: 11.5, color: "#6E6E6E", marginTop: 2, fontFamily: "'IBM Plex Mono',monospace" },
+    historyDetailMeta: { fontSize: 11.5, color: "#7C8A93", marginTop: 2, fontFamily: "'IBM Plex Mono',monospace" },
     historyFromToRow: {
         display: "flex",
         alignItems: "center",
         gap: 12,
-        background: "#F2F2F2",
-        border: "1px solid #D9D9D9",
-        borderRadius: 3,
+        background: "#F7F9FA",
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
         padding: "14px 12px",
         marginBottom: 18,
     },
     historyFromToCol: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 },
-    historyFromToLabel: { fontSize: 9.5, color: "#8C8C8C", textTransform: "uppercase", letterSpacing: "0.06em" },
-    historyFromToValue: { fontSize: 13, fontWeight: 600, color: "#262626", fontFamily: "'IBM Plex Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-    historyFromToSub: { fontSize: 10.5, color: "#6E6E6E" },
+    historyFromToLabel: { fontSize: 9.5, color: "#9AA7AC", textTransform: "uppercase", letterSpacing: "0.06em" },
+    historyFromToValue: { fontSize: 13, fontWeight: 600, color: "#1B2226", fontFamily: "'IBM Plex Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+    historyFromToSub: { fontSize: 10.5, color: "#7C8A93" },
     historyMetaList: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 18 },
     historyMetaRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, fontSize: 12 },
-    historyMetaKey: { color: "#6E6E6E" },
-    historyMetaValue: { color: "#262626", fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, textAlign: "right" },
+    historyMetaKey: { color: "#7C8A93" },
+    historyMetaValue: { color: "#1B2226", fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, textAlign: "right" },
     confirmOverlay: {
         position: "fixed",
         inset: 0,
-        background: "rgba(38,38,38,0.45)",
+        background: "rgba(27,34,38,0.45)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -5706,49 +4926,46 @@ const styles = {
     confirmCard: {
         width: 340,
         background: "#FFFFFF",
-        borderRadius: 4,
+        borderRadius: 16,
         padding: "20px 22px",
-        boxShadow: "0 20px 50px rgba(38,38,38,0.35)",
+        boxShadow: "0 20px 50px rgba(27,34,38,0.35)",
         boxSizing: "border-box",
     },
-    confirmTitle: { fontSize: 15, fontWeight: 700, color: "#262626", fontFamily: "'Segoe UI', sans-serif", marginBottom: 8 },
-    confirmMessage: { fontSize: 12.5, color: "#595959", lineHeight: 1.5, marginBottom: 18 },
+    confirmTitle: { fontSize: 15, fontWeight: 700, color: "#1B2226", fontFamily: "'Poppins',sans-serif", marginBottom: 8 },
+    confirmMessage: { fontSize: 12.5, color: "#5B6B72", lineHeight: 1.5, marginBottom: 18 },
     confirmBtnRow: { display: "flex", justifyContent: "flex-end", gap: 8 },
-    linkPromptRow: { display: "flex", alignItems: "center", gap: 8, background: "#F2F2F2", border: "1px solid #D9D9D9", borderRadius: 3, padding: "8px 10px", marginBottom: 6 },
-    linkPromptJobName: { fontSize: 12.5, fontFamily: "'IBM Plex Mono',monospace", color: "#262626", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-    linkPromptHint: { fontSize: 10.5, color: "#8C8C8C", marginTop: 4 },
     confirmCancelBtn: {
         background: "none",
-        border: "1px solid #C8C8C8",
-        color: "#595959",
-        borderRadius: 3,
+        border: "1px solid #DCE4E7",
+        color: "#5B6B72",
+        borderRadius: 10,
         padding: "8px 16px",
         fontSize: 12.5,
         fontWeight: 600,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
     },
     confirmOkBtn: {
-        background: "#1B6E8C",
+        background: "#2F6E86",
         border: "none",
         color: "#FFFFFF",
-        borderRadius: 3,
+        borderRadius: 10,
         padding: "8px 16px",
         fontSize: 12.5,
         fontWeight: 600,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
     },
     confirmDangerBtn: {
         background: "#C4372E",
         border: "none",
         color: "#FFFFFF",
-        borderRadius: 3,
+        borderRadius: 10,
         padding: "8px 16px",
         fontSize: 12.5,
         fontWeight: 600,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
     },
     donutRow: { display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" },
     donutChart: {
@@ -5772,16 +4989,16 @@ const styles = {
         alignItems: "center",
         justifyContent: "center",
     },
-    donutHoleValue: { fontSize: 16, fontWeight: 700, color: "#262626", fontFamily: "'Segoe UI', sans-serif", lineHeight: 1.1 },
-    donutHoleLabel: { fontSize: 9, color: "#6E6E6E", textTransform: "uppercase", letterSpacing: "0.05em" },
+    donutHoleValue: { fontSize: 16, fontWeight: 700, color: "#1B2226", fontFamily: "'Poppins',sans-serif", lineHeight: 1.1 },
+    donutHoleLabel: { fontSize: 9, color: "#7C8A93", textTransform: "uppercase", letterSpacing: "0.05em" },
     donutLegend: { display: "flex", flexDirection: "column", gap: 7, flex: 1, minWidth: 110 },
     donutLegendRow: { display: "flex", alignItems: "center", gap: 7 },
-    donutLegendLabel: { fontSize: 12, color: "#404040", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-    donutLegendValue: { fontSize: 12, color: "#262626", fontWeight: 600, fontFamily: "'IBM Plex Mono',monospace", flexShrink: 0 },
+    donutLegendLabel: { fontSize: 12, color: "#33424A", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+    donutLegendValue: { fontSize: 12, color: "#1B2226", fontWeight: 600, fontFamily: "'IBM Plex Mono',monospace", flexShrink: 0 },
     eolCard: {
         background: "#FFF9F4",
         border: "1px solid #F7CFCB",
-        borderRadius: 3,
+        borderRadius: 12,
         padding: "10px 14px",
         marginBottom: 12,
         boxShadow: "0 1px 4px rgba(224,54,40,0.06)",
@@ -5793,11 +5010,11 @@ const styles = {
         alignItems: "center",
         gap: 8,
         padding: "5px 8px",
-        borderRadius: 3,
+        borderRadius: 8,
         cursor: "pointer",
         background: "#FFFFFF",
     },
-    eolTrack: { flex: 1, minWidth: 60, height: 6, background: "#E1E1E1", borderRadius: 4, overflow: "hidden" },
+    eolTrack: { flex: 1, minWidth: 60, height: 6, background: "#E7EDEF", borderRadius: 4, overflow: "hidden" },
     barChartWrap: {
         display: "flex",
         alignItems: "flex-end",
@@ -5816,18 +5033,18 @@ const styles = {
         width: 46,
         cursor: "pointer",
     },
-    barChartValue: { fontSize: 10, color: "#595959", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
+    barChartValue: { fontSize: 10, color: "#5B6B72", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
     barChartTrack: {
         width: 26,
         height: 108,
         display: "flex",
         alignItems: "flex-end",
-        background: "#FFFFFF",
-        borderRadius: 2,
+        background: "#F2F6F7",
+        borderRadius: 6,
         overflow: "hidden",
     },
-    barChartFill: { width: "100%", borderRadius: "2px 2px 0 0", transition: "height 0.2s ease" },
-    barChartLabel: { fontSize: 10, color: "#6E6E6E", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 46 },
+    barChartFill: { width: "100%", borderRadius: "6px 6px 0 0", transition: "height 0.2s ease" },
+    barChartLabel: { fontSize: 10, color: "#7C8A93", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 46 },
     toolsLayout: {
         display: "flex",
         gap: 14,
@@ -5838,9 +5055,9 @@ const styles = {
         width: 230,
         flexShrink: 0,
         background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
-        borderRadius: 3,
-        boxShadow: "0 1px 4px rgba(27,110,140,0.06)",
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
         maxHeight: 420,
         overflowY: "auto",
         padding: 5,
@@ -5851,30 +5068,30 @@ const styles = {
         alignItems: "center",
         gap: 8,
         padding: "7px 9px",
-        borderRadius: 3,
+        borderRadius: 8,
         cursor: "pointer",
     },
     toolsSidebarName: { fontSize: 12, fontFamily: "'IBM Plex Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-    toolsSidebarSub: { fontSize: 10, color: "#6E6E6E" },
-    toolsSidebarHours: { fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: "#262626", flexShrink: 0 },
+    toolsSidebarSub: { fontSize: 10, color: "#7C8A93" },
+    toolsSidebarHours: { fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: "#1B2226", flexShrink: 0 },
     toolsBarsGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, margin: "10px 0 14px" },
     toolsRightCol: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 14 },
     toolsDetail: {
         flex: 1,
         minWidth: 0,
         background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
-        borderRadius: 3,
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
         padding: "14px 16px",
-        boxShadow: "0 1px 4px rgba(27,110,140,0.06)",
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
         boxSizing: "border-box",
     },
     toolsSummarySection: {
         background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
-        borderRadius: 3,
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
         padding: "16px 18px",
-        boxShadow: "0 1px 4px rgba(27,110,140,0.06)",
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
         boxSizing: "border-box",
     },
     toolsSummaryHeaderRow: {
@@ -5883,57 +5100,37 @@ const styles = {
         gap: 10,
         padding: "6px 8px",
         fontSize: 10.5,
-        color: "#6E6E6E",
+        color: "#7C8A93",
         textTransform: "uppercase",
         letterSpacing: "0.05em",
-        borderBottom: "1px solid #D9D9D9",
+        borderBottom: "1px solid #E4EAEC",
     },
     toolsSummaryRow: {
         display: "flex",
         alignItems: "center",
         gap: 10,
         padding: "8px 8px",
-        borderRadius: 3,
+        borderRadius: 8,
         cursor: "pointer",
     },
-    toolsSummaryCol: { width: 70, flexShrink: 0, fontSize: 11.5, fontFamily: "'IBM Plex Mono',monospace", color: "#595959", textAlign: "right" },
+    toolsSummaryCol: { width: 70, flexShrink: 0, fontSize: 11.5, fontFamily: "'IBM Plex Mono',monospace", color: "#5B6B72", textAlign: "right" },
     toolRow: {
         display: "flex",
         alignItems: "center",
         gap: 6,
         padding: "5px 8px",
-        borderRadius: 3,
-        background: "#F2F2F2",
+        borderRadius: 8,
+        background: "#F7F9FA",
         cursor: "pointer",
     },
-    toolRowName: { fontSize: 11.5, fontFamily: "'IBM Plex Mono',monospace", color: "#262626", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-    toolRowHours: { fontSize: 10.5, color: "#6E6E6E", fontFamily: "'IBM Plex Mono',monospace", flexShrink: 0 },
-    toolEditCard: {
-        background: "#F9F9F9",
-        border: "1px solid #E1E1E1",
-        borderRadius: 3,
-        padding: "8px 9px",
-        boxSizing: "border-box",
-    },
-    toolEditHeaderRow: {
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        marginBottom: 6,
-        flexWrap: "wrap",
-    },
-    toolNumberInput: { width: 46, flexShrink: 0, fontSize: 11.5, padding: "5px 6px" },
-    toolNameInput: { width: "auto", flex: "1 1 80px", minWidth: 70, fontSize: 11.5, padding: "5px 7px" },
-    toolEditHours: { fontSize: 10.5, color: "#595959", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap", flexShrink: 0 },
-    toolChangeIndex: { fontSize: 10.5, color: "#8C8C8C", fontFamily: "'IBM Plex Mono',monospace", flexShrink: 0 },
-    segmentFieldLabel: { fontSize: 10, color: "#8C8C8C", whiteSpace: "nowrap", flexShrink: 0 },
-    toolSpanNote: { fontSize: 10.5, color: "#1B6E8C", background: "#E3F0FB", border: "1px solid #BBD9F2", borderRadius: 3, padding: "4px 8px", marginBottom: 6 },
+    toolRowName: { fontSize: 11.5, fontFamily: "'IBM Plex Mono',monospace", color: "#1B2226", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+    toolRowHours: { fontSize: 10.5, color: "#7C8A93", fontFamily: "'IBM Plex Mono',monospace", flexShrink: 0 },
     bottleneckRow: {
         display: "flex",
         alignItems: "center",
         gap: 10,
         padding: "8px 10px",
-        borderRadius: 3,
+        borderRadius: 8,
         background: "#FDECEB",
         border: "1px solid #F7CFCB",
         cursor: "pointer",
@@ -5944,32 +5141,32 @@ const styles = {
         color: "#C4372E",
         background: "#FFFFFF",
         border: "1px solid #F7CFCB",
-        borderRadius: 4,
+        borderRadius: 20,
         padding: "3px 9px",
         flexShrink: 0,
         fontFamily: "'IBM Plex Mono',monospace",
         whiteSpace: "nowrap",
     },
-    heatmapDayLabel: { fontSize: 10.5, color: "#6E6E6E", textAlign: "center", fontFamily: "'IBM Plex Mono',monospace", paddingBottom: 4 },
+    heatmapDayLabel: { fontSize: 10.5, color: "#7C8A93", textAlign: "center", fontFamily: "'IBM Plex Mono',monospace", paddingBottom: 4 },
     heatLegendRow: { display: "flex", alignItems: "center", gap: 8, marginBottom: 12 },
-    heatLegendLabel: { fontSize: 10.5, color: "#6E6E6E", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
+    heatLegendLabel: { fontSize: 10.5, color: "#7C8A93", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
     heatLegendBar: {
         width: 160,
         height: 8,
-        borderRadius: 2,
+        borderRadius: 5,
         background: "linear-gradient(90deg, hsl(130,70%,46%), hsl(65,70%,44%), hsl(0,70%,40%))",
     },
-    heatmapRowLabel: { fontSize: 11.5, color: "#404040", fontFamily: "'IBM Plex Mono',monospace", display: "flex", alignItems: "center", paddingRight: 6 },
+    heatmapRowLabel: { fontSize: 11.5, color: "#33424A", fontFamily: "'IBM Plex Mono',monospace", display: "flex", alignItems: "center", paddingRight: 6 },
     heatmapCell: {
         height: 30,
-        borderRadius: 2,
+        borderRadius: 6,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         fontSize: 10.5,
         fontFamily: "'IBM Plex Mono',monospace",
     },
-    headerRow: { position: "sticky", top: 0, zIndex: 30, display: "flex", boxShadow: "0 1px 0 #BFBFBF" },
+    headerRow: { position: "sticky", top: 0, zIndex: 30, display: "flex", boxShadow: "0 1px 0 #CFDBDF" },
     cornerCell: {
         position: "sticky",
         left: 0,
@@ -5978,8 +5175,8 @@ const styles = {
         width: RESOURCE_COL_WIDTH,
         height: HEADER_HEIGHT,
         background: "#FFFFFF",
-        borderRight: "1px solid #D9D9D9",
-        borderBottom: "1px solid #BFBFBF",
+        borderRight: "1px solid #E4EAEC",
+        borderBottom: "1px solid #CFDBDF",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
@@ -5987,22 +5184,22 @@ const styles = {
         paddingRight: 10,
         fontSize: 10.5,
         letterSpacing: "0.06em",
-        color: "#6E6E6E",
+        color: "#7C8A93",
         textTransform: "uppercase",
         boxSizing: "border-box",
     },
-    addResBtn: { width: 20, height: 20, padding: 0, fontSize: 13, lineHeight: 1, background: "#1B6E8C", color: "#FFFFFF", border: "none", borderRadius: 2, cursor: "pointer" },
+    addResBtn: { width: 20, height: 20, padding: 0, fontSize: 13, lineHeight: 1, background: "#2F6E86", color: "#FFFFFF", border: "none", borderRadius: 5, cursor: "pointer" },
     dayLabel: { fontSize: 12, fontWeight: 600, fontFamily: "'IBM Plex Mono',monospace", paddingLeft: 8, whiteSpace: "nowrap" },
-    hourLabel: { position: "absolute", top: 4, left: 4, fontSize: 10.5, color: "#595959", fontWeight: 500, fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
-    nowDot: { position: "absolute", top: -3, left: -3, width: 8, height: 8, borderRadius: "50%", background: "#1B6E8C", boxShadow: "0 0 0 3px #1B6E8C22" },
+    hourLabel: { position: "absolute", top: 4, left: 4, fontSize: 10.5, color: "#5B6B72", fontWeight: 500, fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" },
+    nowDot: { position: "absolute", top: -3, left: -3, width: 8, height: 8, borderRadius: "50%", background: "#2F6E86", boxShadow: "0 0 0 3px #2F6E8622" },
     resourceCell: {
         position: "sticky",
         left: 0,
         zIndex: 20,
         width: RESOURCE_COL_WIDTH,
         background: "#FFFFFF",
-        borderRight: "1px solid #D9D9D9",
-        borderBottom: "1px solid #E1E1E1",
+        borderRight: "1px solid #E4EAEC",
+        borderBottom: "1px solid #E7EDEF",
         padding: "8px 14px",
         boxSizing: "border-box",
         display: "flex",
@@ -6011,23 +5208,23 @@ const styles = {
         gap: 3,
     },
     resourceName: { fontSize: 12.5, fontWeight: 600, fontFamily: "'IBM Plex Mono',monospace" },
-    resourceType: { fontSize: 10.5, color: "#6E6E6E" },
-    utilTrack: { width: "100%", height: 4, background: "#E1E1E1", borderRadius: 3, marginTop: 3, overflow: "hidden" },
-    utilFill: { height: "100%", background: "linear-gradient(90deg,#1B6E8C,#4FA8C9)", borderRadius: 3 },
-    pool: { borderTop: "1px solid #D9D9D9", background: "#F5F5F5", padding: "12px 18px 14px" },
-    poolLabel: { fontSize: 10.5, letterSpacing: "0.06em", color: "#6E6E6E", textTransform: "uppercase", marginBottom: 8 },
+    resourceType: { fontSize: 10.5, color: "#7C8A93" },
+    utilTrack: { width: "100%", height: 4, background: "#E7EDEF", borderRadius: 3, marginTop: 3, overflow: "hidden" },
+    utilFill: { height: "100%", background: "linear-gradient(90deg,#2F6E86,#3E96B8)", borderRadius: 3 },
+    pool: { borderTop: "1px solid #E4EAEC", background: "#F4F7F8", padding: "12px 18px 14px" },
+    poolLabel: { fontSize: 10.5, letterSpacing: "0.06em", color: "#7C8A93", textTransform: "uppercase", marginBottom: 8 },
     ncNotice: {
         display: "flex",
         alignItems: "center",
         gap: 8,
         fontSize: 11,
         padding: "6px 8px 6px 10px",
-        borderRadius: 3,
+        borderRadius: 8,
         border: "1px solid transparent",
     },
-    ncNotice_created: { background: "#E3F5E9", color: "#187A3E", borderColor: "#A8DDBB" },
+    ncNotice_created: { background: "#E4F5EE", color: "#0F6E56", borderColor: "#B7E3D3" },
     ncNotice_updated: { background: "#FCF0DC", color: "#8A5A0F", borderColor: "#F3DDAE" },
-    ncNotice_unchanged: { background: "#FFFFFF", color: "#595959", borderColor: "#C8C8C8" },
+    ncNotice_unchanged: { background: "#F2F6F7", color: "#5B6B72", borderColor: "#DCE4E7" },
     ncNotice_error: { background: "#FDECEB", color: "#C4372E", borderColor: "#F7CFCB" },
     ncNoticeClose: {
         display: "flex",
@@ -6041,18 +5238,18 @@ const styles = {
         flexShrink: 0,
         padding: 0,
     },
-    addJobBtn: { width: "auto", height: 26, padding: "0 12px", fontSize: 11.5, fontWeight: 500, marginBottom: 8, background: "#1B6E8C", color: "#FFFFFF", border: "1px solid #1B6E8C" },
+    addJobBtn: { width: "auto", height: 26, padding: "0 12px", fontSize: 11.5, fontWeight: 500, marginBottom: 8, background: "#2F6E86", color: "#FFFFFF", border: "1px solid #2F6E86" },
     poolStrip: { display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 },
-    poolEmpty: { fontSize: 12, color: "#6E6E6E", padding: "8px 0" },
+    poolEmpty: { fontSize: 12, color: "#7C8A93", padding: "8px 0" },
     chip: {
         flexShrink: 0,
         background: "#FFFFFF",
-        borderRadius: 3,
+        borderRadius: 12,
         padding: "7px 11px",
         minWidth: 96,
         cursor: "grab",
         userSelect: "none",
-        border: "1px solid #D9D9D9",
+        border: "1px solid #E4EAEC",
     },
     panel: {
         position: "absolute",
@@ -6061,18 +5258,18 @@ const styles = {
         bottom: 0,
         width: 240,
         background: "#FFFFFF",
-        borderLeft: "1px solid #D9D9D9",
+        borderLeft: "1px solid #E4EAEC",
         padding: "16px 16px 20px",
         display: "flex",
         flexDirection: "column",
         gap: 4,
         overflowY: "auto",
         zIndex: 50,
-        boxShadow: "-8px 0 24px rgba(27,110,140,0.08)",
+        boxShadow: "-8px 0 24px rgba(47,110,134,0.08)",
     },
     panelHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
-    panelClose: { background: "none", border: "none", color: "#6E6E6E", cursor: "pointer", padding: 2, display: "flex" },
-    fieldLabel: { fontSize: 10.5, color: "#6E6E6E", textTransform: "uppercase", letterSpacing: "0.05em", marginTop: 10, marginBottom: 4 },
+    panelClose: { background: "none", border: "none", color: "#7C8A93", cursor: "pointer", padding: 2, display: "flex" },
+    fieldLabel: { fontSize: 10.5, color: "#7C8A93", textTransform: "uppercase", letterSpacing: "0.05em", marginTop: 10, marginBottom: 4 },
     conflictNote: {
         display: "flex",
         alignItems: "center",
@@ -6080,7 +5277,7 @@ const styles = {
         color: "#C4372E",
         background: "#FDECEB",
         border: "1px solid #F7CFCB",
-        borderRadius: 4,
+        borderRadius: 16,
         padding: "8px 10px",
         marginTop: 12,
     },
@@ -6088,10 +5285,10 @@ const styles = {
         display: "flex",
         alignItems: "center",
         fontSize: 11.5,
-        color: "#187A3E",
-        background: "#E3F5E9",
-        border: "1px solid #A8DDBB",
-        borderRadius: 4,
+        color: "#0F6E56",
+        background: "#E4F5EE",
+        border: "1px solid #B7E3D3",
+        borderRadius: 16,
         padding: "8px 10px",
         marginTop: 12,
     },
@@ -6103,21 +5300,21 @@ const styles = {
         background: "none",
         border: "1px solid #F7CFCB",
         color: "#C4372E",
-        borderRadius: 3,
+        borderRadius: 12,
         padding: "8px 10px",
         fontSize: 12,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
     },
     qrIntro: {
         display: "flex",
         alignItems: "center",
         gap: 8,
         fontSize: 12.5,
-        color: "#595959",
-        background: "#F5F5F5",
-        border: "1px solid #D9D9D9",
-        borderRadius: 3,
+        color: "#5B6B72",
+        background: "#F4F7F8",
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
         padding: "10px 14px",
         marginBottom: 16,
     },
@@ -6128,55 +5325,55 @@ const styles = {
     },
     qrCard: {
         background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
-        borderRadius: 4,
+        border: "1px solid #E4EAEC",
+        borderRadius: 14,
         padding: "14px 16px",
-        boxShadow: "0 1px 4px rgba(27,110,140,0.06)",
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
     },
     qrCardHeader: { display: "flex", alignItems: "center", gap: 6, marginBottom: 2 },
-    qrJobName: { fontSize: 12.5, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: "#262626" },
+    qrJobName: { fontSize: 12.5, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: "#1B2226" },
     qrRunningBadge: {
         marginLeft: "auto",
         fontSize: 10,
-        color: "#21A366",
-        background: "#E3F5E9",
-        borderRadius: 4,
+        color: "#17A2A0",
+        background: "#E4F5EE",
+        borderRadius: 20,
         padding: "2px 8px",
         fontFamily: "'IBM Plex Mono',monospace",
     },
-    qrResourceName: { fontSize: 10.5, color: "#6E6E6E", marginBottom: 10 },
+    qrResourceName: { fontSize: 10.5, color: "#7C8A93", marginBottom: 10 },
     qrImages: { display: "flex", gap: 10 },
     qrImageBlock: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
-    qrImage: { width: "100%", maxWidth: 130, height: "auto", borderRadius: 3, border: "1px solid #D9D9D9" },
-    qrLabel: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, fontFamily: "'Segoe UI', 'Inter', sans-serif" },
+    qrImage: { width: "100%", maxWidth: 130, height: "auto", borderRadius: 8, border: "1px solid #E4EAEC" },
+    qrLabel: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, fontFamily: "'Inter',sans-serif" },
     shiftIntroCard: {
         background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
-        borderRadius: 4,
+        border: "1px solid #E4EAEC",
+        borderRadius: 14,
         padding: "10px 14px",
-        boxShadow: "0 1px 4px rgba(27,110,140,0.06)",
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
         marginBottom: 10,
         boxSizing: "border-box",
     },
     shiftIntroIcon: {
         width: 24,
         height: 24,
-        borderRadius: 2,
-        background: "#E3F0FB",
+        borderRadius: 7,
+        background: "#E7EEF1",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
     },
-    shiftIntroTitle: { fontSize: 13, fontWeight: 600, color: "#262626", fontFamily: "'Segoe UI', sans-serif" },
+    shiftIntroTitle: { fontSize: 13, fontWeight: 600, color: "#1B2226", fontFamily: "'Poppins',sans-serif" },
     shiftTimelineRuler: { position: "relative", height: 14, marginTop: 10 },
-    shiftTimelineTick: { position: "absolute", top: 0, fontSize: 9, color: "#8C8C8C", fontFamily: "'IBM Plex Mono',monospace", transform: "translateX(-50%)", whiteSpace: "nowrap" },
+    shiftTimelineTick: { position: "absolute", top: 0, fontSize: 9, color: "#9AA7AC", fontFamily: "'IBM Plex Mono',monospace", transform: "translateX(-50%)", whiteSpace: "nowrap" },
     shiftTimelineTrack: {
         position: "relative",
         height: 22,
-        borderRadius: 2,
-        background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
+        borderRadius: 7,
+        background: "#F2F6F7",
+        border: "1px solid #E4EAEC",
         overflow: "hidden",
     },
     shiftTimelineNow: {
@@ -6184,13 +5381,13 @@ const styles = {
         top: 0,
         bottom: 0,
         width: 2,
-        background: "#262626",
-        boxShadow: "0 0 0 3px rgba(38,38,38,0.12)",
+        background: "#1B2226",
+        boxShadow: "0 0 0 3px rgba(27,34,38,0.12)",
     },
     shiftStatsRow: { display: "flex", gap: 18, marginTop: 8, flexWrap: "wrap" },
     shiftStatItem: { display: "flex", flexDirection: "column", gap: 1 },
-    shiftStatValue: { fontSize: 14, fontWeight: 600, color: "#262626", fontFamily: "'Segoe UI', sans-serif" },
-    shiftStatLabel: { fontSize: 9.5, color: "#6E6E6E", textTransform: "uppercase", letterSpacing: "0.05em" },
+    shiftStatValue: { fontSize: 14, fontWeight: 600, color: "#1B2226", fontFamily: "'Poppins',sans-serif" },
+    shiftStatLabel: { fontSize: 9.5, color: "#7C8A93", textTransform: "uppercase", letterSpacing: "0.05em" },
     shiftEmptyState: {
         display: "flex",
         flexDirection: "column",
@@ -6199,16 +5396,16 @@ const styles = {
         gap: 4,
         padding: "22px 20px",
         background: "#FFFFFF",
-        border: "1px dashed #C8C8C8",
-        borderRadius: 4,
+        border: "1px dashed #DCE4E7",
+        borderRadius: 14,
         marginBottom: 8,
     },
     shiftCard: {
         background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
-        borderRadius: 3,
+        border: "1px solid #E4EAEC",
+        borderRadius: 12,
         padding: "8px 10px",
-        boxShadow: "0 1px 4px rgba(27,110,140,0.06)",
+        boxShadow: "0 1px 4px rgba(47,110,134,0.06)",
         boxSizing: "border-box",
     },
     shiftCardOverlap: {
@@ -6218,15 +5415,15 @@ const styles = {
     shiftCardRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
     shiftColorSwatchWrap: { position: "relative", display: "flex", cursor: "pointer", flexShrink: 0 },
     shiftColorInputHidden: { position: "absolute", inset: 0, width: 26, height: 26, opacity: 0, cursor: "pointer", border: "none", padding: 0 },
-    shiftColorSwatch: { width: 26, height: 26, borderRadius: 3, border: "1px solid rgba(0,0,0,0.08)", boxShadow: "inset 0 0 0 2px rgba(255,255,255,0.5)", flexShrink: 0 },
+    shiftColorSwatch: { width: 26, height: 26, borderRadius: 8, border: "1px solid rgba(0,0,0,0.08)", boxShadow: "inset 0 0 0 2px rgba(255,255,255,0.5)", flexShrink: 0 },
     shiftNameInput: { width: "auto", flex: "1 1 110px", minWidth: 90, fontWeight: 600, fontSize: 12.5, padding: "5px 8px" },
     shiftTimeInputCompact: { width: 84, flexShrink: 0, fontSize: 12, padding: "5px 6px" },
     shiftDurationBadge: {
         fontSize: 10,
-        color: "#1B6E8C",
-        background: "#E3F0FB",
-        border: "1px solid #BBD9F2",
-        borderRadius: 4,
+        color: "#2F6E86",
+        background: "#E7EEF1",
+        border: "1px solid #D3E1E5",
+        borderRadius: 20,
         padding: "3px 8px",
         fontFamily: "'IBM Plex Mono',monospace",
         whiteSpace: "nowrap",
@@ -6240,27 +5437,27 @@ const styles = {
         color: "#B45309",
         background: "#FCF0DC",
         border: "1px solid #F3DDAE",
-        borderRadius: 4,
+        borderRadius: 20,
         padding: "3px 8px",
         whiteSpace: "nowrap",
         flexShrink: 0,
     },
-    shiftBreaksSection: { marginTop: 6, background: "#F2F2F2", border: "1px solid #E1E1E1", borderRadius: 3, padding: "6px 8px" },
+    shiftBreaksSection: { marginTop: 6, background: "#F7F9FA", border: "1px solid #E7EDEF", borderRadius: 10, padding: "6px 8px" },
     shiftBreaksHeader: { display: "flex", alignItems: "center", gap: 5, marginBottom: 4 },
-    shiftBreaksLabel: { fontSize: 10, color: "#6E6E6E", textTransform: "uppercase", letterSpacing: "0.05em" },
+    shiftBreaksLabel: { fontSize: 10, color: "#7C8A93", textTransform: "uppercase", letterSpacing: "0.05em" },
     shiftAddBreakBtn: {
         display: "flex",
         alignItems: "center",
         gap: 4,
         marginLeft: "auto",
         background: "none",
-        border: "1px dashed #ABABAB",
-        color: "#1B6E8C",
-        borderRadius: 4,
+        border: "1px dashed #B9CBD1",
+        color: "#2F6E86",
+        borderRadius: 20,
         padding: "3px 8px",
         fontSize: 10,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
         whiteSpace: "nowrap",
     },
     shiftBreakRow: {
@@ -6268,8 +5465,8 @@ const styles = {
         alignItems: "center",
         gap: 5,
         background: "#FFFFFF",
-        border: "1px solid #E1E1E1",
-        borderRadius: 3,
+        border: "1px solid #E7EDEF",
+        borderRadius: 8,
         padding: "4px 7px",
         flexWrap: "wrap",
     },
@@ -6279,8 +5476,8 @@ const styles = {
         width: 32,
         height: 32,
         padding: 0,
-        border: "1px solid #C8C8C8",
-        borderRadius: 3,
+        border: "1px solid #DCE4E7",
+        borderRadius: 8,
         cursor: "pointer",
         background: "none",
         flexShrink: 0,
@@ -6293,22 +5490,22 @@ const styles = {
         display: "flex",
         alignItems: "center",
         gap: 8,
-        background: "#262626",
-        borderRadius: 4,
+        background: "#1B2226",
+        borderRadius: 16,
         padding: "8px 8px 8px 14px",
-        boxShadow: "0 10px 28px rgba(38,38,38,0.35)",
+        boxShadow: "0 10px 28px rgba(27,34,38,0.35)",
     },
-    undoPillText: { fontSize: 12, color: "#FFFFFF", fontFamily: "'Segoe UI', 'Inter', sans-serif", whiteSpace: "nowrap" },
+    undoPillText: { fontSize: 12, color: "#FFFFFF", fontFamily: "'Inter',sans-serif", whiteSpace: "nowrap" },
     undoPillBtn: {
-        background: "#1B6E8C",
+        background: "#2F6E86",
         color: "#FFFFFF",
         border: "none",
-        borderRadius: 3,
+        borderRadius: 12,
         padding: "6px 12px",
         fontSize: 12,
         fontWeight: 600,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
         whiteSpace: "nowrap",
     },
     undoPillClose: {
@@ -6333,12 +5530,12 @@ const styles = {
         display: "flex",
         alignItems: "center",
         gap: 8,
-        background: "#262626",
-        borderRadius: 4,
+        background: "#1B2226",
+        borderRadius: 16,
         padding: "8px 12px",
-        boxShadow: "0 10px 28px rgba(38,38,38,0.35)",
+        boxShadow: "0 10px 28px rgba(27,34,38,0.35)",
     },
-    bulkBarCount: { fontSize: 12.5, fontWeight: 600, color: "#FFFFFF", fontFamily: "'Segoe UI', 'Inter', sans-serif", whiteSpace: "nowrap", paddingLeft: 4 },
+    bulkBarCount: { fontSize: 12.5, fontWeight: 600, color: "#FFFFFF", fontFamily: "'Inter',sans-serif", whiteSpace: "nowrap", paddingLeft: 4 },
     bulkBarDivider: { width: 1, height: 18, background: "rgba(255,255,255,0.2)" },
     bulkBarBtn: {
         display: "flex",
@@ -6347,11 +5544,11 @@ const styles = {
         background: "rgba(255,255,255,0.1)",
         border: "1px solid rgba(255,255,255,0.18)",
         color: "#FFFFFF",
-        borderRadius: 4,
+        borderRadius: 14,
         padding: "6px 10px",
         fontSize: 11.5,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
         whiteSpace: "nowrap",
     },
     bulkBarDeleteBtn: {
@@ -6361,11 +5558,11 @@ const styles = {
         background: "rgba(240,98,91,0.18)",
         border: "1px solid rgba(240,98,91,0.4)",
         color: "#FF8B83",
-        borderRadius: 4,
+        borderRadius: 14,
         padding: "6px 12px",
         fontSize: 12,
         cursor: "pointer",
-        fontFamily: "'Segoe UI', 'Inter', sans-serif",
+        fontFamily: "'Inter',sans-serif",
         whiteSpace: "nowrap",
     },
     bulkBarClearBtn: {

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
 import * as XLSX from "xlsx";
-import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, Minimize2, ChevronLeft, ChevronRight, QrCode, Play, Square, Zap, Upload, Wrench, Clock, FileSpreadsheet, Printer, Volume2, VolumeX, Settings, Plus, Coffee, PieChart, Layers, Package, LogOut, History as HistoryIcon, Move, Link2, Cpu } from "lucide-react";
+import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, Minimize2, ChevronLeft, ChevronRight, QrCode, Play, Square, Zap, Upload, Wrench, Clock, FileSpreadsheet, Printer, Volume2, VolumeX, Settings, Plus, Coffee, PieChart, Layers, Package, LogOut, History as HistoryIcon, Move, Link2 } from "lucide-react";
 import { parseNCProgram, jobNameFromFilename } from "./utils/ncParser";
 
 const NAV_ITEMS = [
@@ -16,7 +16,7 @@ const NAV_ITEMS = [
 
 const DAY_ABBR_LOCALE = { weekday: "short" };
 
-const ROW_HEIGHT = 80;
+const ROW_HEIGHT = 64;
 const HEADER_HEIGHT = 68;
 const SHIFT_BAND_HEIGHT = 16;
 const RESOURCE_COL_WIDTH = 168;
@@ -902,40 +902,6 @@ useEffect(() => {
         return { avgUtil, busiest, totalConflictJobs, bottlenecks };
     }, [resources, utilization, resourceConflictCounts, conflictIds]);
 
-    // Today's job summary: jobs whose planned window overlaps today
-    const todaySummary = useMemo(() => {
-        const todayStartH = Math.floor(nowHour / 24) * 24;
-        const todayEndH = todayStartH + 24;
-        const todayJobs = jobs.filter((j) => j.resourceId && j.startHour < todayEndH && j.startHour + j.duration > todayStartH);
-        const total = todayJobs.length;
-        const done = todayJobs.filter((j) => j.completed).length;
-        const running = todayJobs.filter((j) => j.isRunning).length;
-        const overdue = todayJobs.filter((j) => !j.isRunning && !j.completed && j.startHour + j.duration < nowHour).length;
-        const scheduled = total - done - running - overdue;
-
-        // For completed jobs: compare actual run hours vs planned duration
-        const completedWithTiming = todayJobs
-            .filter((j) => j.completed && j.runStartedAt && j.actualRunHours != null)
-            .map((j) => {
-                const actualH = j.actualRunHours;
-                const plannedH = j.duration;
-                const diffMin = Math.round((actualH - plannedH) * 60);
-                return {
-                    id: j.id, name: j.name, product: j.product,
-                    resourceId: j.resourceId,
-                    plannedH, actualH, diffMin,
-                    status: diffMin > 0 ? "delayed" : diffMin < 0 ? "early" : "on-time",
-                };
-            });
-        const delayedCount = completedWithTiming.filter((j) => j.status === "delayed").length;
-        const earlyCount   = completedWithTiming.filter((j) => j.status === "early").length;
-        const onTimeCount  = completedWithTiming.filter((j) => j.status === "on-time").length;
-        const avgDelayMin  = completedWithTiming.filter((j) => j.status === "delayed").reduce((s, j) => s + j.diffMin, 0) / (delayedCount || 1);
-        const avgEarlyMin  = Math.abs(completedWithTiming.filter((j) => j.status === "early").reduce((s, j) => s + j.diffMin, 0) / (earlyCount || 1));
-
-        return { total, done, running, overdue, scheduled, completedWithTiming, delayedCount, earlyCount, onTimeCount, avgDelayMin, avgEarlyMin };
-    }, [jobs, nowHour]);
-
     // how many jobs currently sit in each lifecycle state - powers the status breakdown
     // donut on the Analytics page. Mirrors the same running/done/overdue logic used to
     // color job blocks on the Gantt chart, just aggregated across all jobs.
@@ -996,7 +962,6 @@ useEffect(() => {
                 opCount: 0,
                 jobs: [],
                 historicalJobNames: h.jobNames || [],
-                maxLife: h.maxLife || null,
             });
         });
 
@@ -1046,8 +1011,7 @@ useEffect(() => {
         return toolSummary
             .map((t) => {
                 const usedHours = t.actualHours + t.liveHours;
-                const refLife = t.maxLife || TOOL_LIFE_HOURS;
-                return { ...t, usedHours, lifePct: Math.min(100, (usedHours / refLife) * 100) };
+                return { ...t, usedHours, lifePct: Math.min(100, (usedHours / TOOL_LIFE_HOURS) * 100) };
             })
             .filter((t) => t.lifePct >= 80)
             .sort((a, b) => b.lifePct - a.lifePct);
@@ -1747,57 +1711,12 @@ useEffect(() => {
             Jobs: t.jobs.length,
             "Estimated (h)": Number(t.estHours.toFixed(2)),
             "Actual (h)": Number((t.actualHours + t.liveHours).toFixed(2)),
-            "Max life (h)": t.maxLife || TOOL_LIFE_HOURS,
-            "Tool life used (%)": Number(Math.min(100, ((t.actualHours + t.liveHours) / (t.maxLife || TOOL_LIFE_HOURS)) * 100).toFixed(0)),
+            "Tool life used (%)": Number(Math.min(100, ((t.actualHours + t.liveHours) / TOOL_LIFE_HOURS) * 100).toFixed(0)),
         }));
         const ws = XLSX.utils.json_to_sheet(rows);
-        ws["!cols"] = [{ wch: 8 }, { wch: 22 }, { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 13 }, { wch: 16 }];
+        ws["!cols"] = [{ wch: 8 }, { wch: 22 }, { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 16 }];
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Tool usage");
-        await saveWorkbook(wb, defaultName);
-    }
-
-    async function exportTodaySummaryExcel() {
-        const today = new Date(baseDate.getTime() + Math.floor(nowHour / 24) * 86400000);
-        const dateStr = today.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-        const defaultName = `daily_summary_${toDateInputValue(today)}`;
-
-        // Sheet 1: overview
-        const overviewRows = [
-            { Metric: "Date", Value: dateStr },
-            { Metric: "Total jobs today", Value: todaySummary.total },
-            { Metric: "Done", Value: todaySummary.done },
-            { Metric: "Running", Value: todaySummary.running },
-            { Metric: "Scheduled (not started)", Value: todaySummary.scheduled },
-            { Metric: "Overdue", Value: todaySummary.overdue },
-            { Metric: "Completed — delayed", Value: todaySummary.delayedCount },
-            { Metric: "Completed — on time", Value: todaySummary.onTimeCount },
-            { Metric: "Completed — early", Value: todaySummary.earlyCount },
-            { Metric: "Avg delay (min)", Value: todaySummary.delayedCount > 0 ? Math.round(todaySummary.avgDelayMin) : "—" },
-            { Metric: "Avg early (min)", Value: todaySummary.earlyCount > 0 ? Math.round(todaySummary.avgEarlyMin) : "—" },
-        ];
-        const ws1 = XLSX.utils.json_to_sheet(overviewRows);
-        ws1["!cols"] = [{ wch: 30 }, { wch: 16 }];
-
-        // Sheet 2: per-job timing
-        const jobRows = todaySummary.completedWithTiming.map((j) => {
-            const res = resources.find((r) => r.id === j.resourceId);
-            return {
-                "Job": j.name,
-                "Product": j.product,
-                "Resource": res ? res.name : "—",
-                "Planned (h)": Number(j.plannedH.toFixed(2)),
-                "Actual (h)": Number(j.actualH.toFixed(2)),
-                "Diff (min)": j.diffMin,
-                "Status": j.status === "delayed" ? "Delayed" : j.status === "early" ? "Early" : "On time",
-            };
-        });
-        const ws2 = XLSX.utils.json_to_sheet(jobRows.length > 0 ? jobRows : [{ Note: "No completed jobs with timing data today" }]);
-        ws2["!cols"] = [{ wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }];
-
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws1, "Overview");
-        XLSX.utils.book_append_sheet(wb, ws2, "Job timing");
         await saveWorkbook(wb, defaultName);
     }
 
@@ -2126,19 +2045,6 @@ useEffect(() => {
     const selectedJob = jobs.find((j) => j.id === selectedJobId) || null;
     const selectedResource = resources.find((r) => r.id === selectedResourceId) || null;
     const toolKey = (t) => (t.number || "?") + "::" + t.name;
-
-    function updateToolMaxLife(t, newMaxLife) {
-        const key = (t.number || "?") + "::" + t.name;
-        setToolHistory((prev) => {
-            const existing = prev.find((h) => (h.number || "?") + "::" + h.name === key);
-            if (existing) {
-                return prev.map((h) =>
-                    (h.number || "?") + "::" + h.name === key ? { ...h, maxLife: newMaxLife || null } : h
-                );
-            }
-            return [...prev, { number: t.number, name: t.name, actualHours: 0, jobNames: [], maxLife: newMaxLife || null }];
-        });
-    }
     const selectedTool = (selectedToolKey ? visibleToolSummary.find((t) => toolKey(t) === selectedToolKey) : null) || visibleToolSummary[0] || null;
     const conflictCount = conflictIds.size;
 
@@ -3126,8 +3032,8 @@ useEffect(() => {
                                                                         position: "absolute",
                                                                         left: job.startHour * hourWidth,
                                                                         width: Math.max(6, job.duration * hourWidth - 2),
-                                                                        top: 5,
-                                                                        height: ROW_HEIGHT - 28,
+                                                                        top: 7,
+                                                                        height: ROW_HEIGHT - 14,
 background: blocked ? "#FBE4E2" : job.isRunning ? JOB_RUNNING_GREEN : isDone ? "#E3F0FB" : isOverdue ? OVERDUE_AMBER_BG : job.locked ? `${color}22` : `${color}40`,
 border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_AMBER_BORDER}` : isConflict ? "1px solid #F0625B" : isDone ? `1px solid ${DONE_BLUE}55` : job.locked ? `1px solid ${color}77` : `1px solid ${color}AA`,
                                                                         borderLeftWidth: 4,
@@ -3215,54 +3121,6 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                             style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 8, cursor: "ew-resize" }}
                                                                         />
                                                                     )}
-                                                                    {(job.toolChanges || []).length > 0 && (() => {
-                                                                        const totalJobMin = job.duration * 60;
-                                                                        return (
-                                                                            <div style={{ position: "absolute", left: 4, right: 4, bottom: 3, height: 4, borderRadius: 2, background: "rgba(0,0,0,0.08)", overflow: "hidden", pointerEvents: "none" }}
-                                                                                title={`Tool changes: ${(job.toolChanges||[]).length} step${(job.toolChanges||[]).length!==1?"s":""} · ${job.toolChanges.reduce((s,c)=>s+(Number(c.durationMin)||0),0)}min total`}>
-                                                                                {(job.toolChanges||[]).map((c,ci) => {
-                                                                                    const startPct = Math.min(100, ((Number(c.startMin)||0)/totalJobMin)*100);
-                                                                                    const widthPct = Math.min(100-startPct, ((Number(c.durationMin)||0)/totalJobMin)*100);
-                                                                                    if (widthPct <= 0) return null;
-                                                                                    return <div key={c.id||ci} style={{ position:"absolute", left:`${startPct}%`, width:`${widthPct}%`, top:0, bottom:0, background: job.isRunning?"rgba(255,255,255,0.75)":"#E8A33D", borderRadius:2 }} />;
-                                                                                })}
-                                                                            </div>
-                                                                        );
-                                                                    })()}
-                                                                </div>
-                                                            );
-                                                        })}
-                                                    {/* ── Actual-run bars: grey bg at real scan-start, fill = elapsed ── */}
-                                                    {scheduledJobs
-                                                        .filter((j) => j.resourceId === r.id && j.runStartedAt && (j.isRunning || j.completed))
-                                                        .map((job) => {
-                                                            const runStart = new Date(job.runStartedAt);
-                                                            const barStartH = (runStart.getTime() - baseDate.getTime()) / 3600000;
-                                                            if (barStartH < 0) return null;
-                                                            const bgW = Math.max(6, job.duration * hourWidth);
-                                                            const elapsedH = job.isRunning
-                                                                ? Math.max(0, (nowTick - runStart.getTime()) / 3600000)
-                                                                : (job.actualRunHours || 0);
-                                                            const fillW = Math.max(0, elapsedH * hourWidth);
-                                                            const isRunning = !!job.isRunning;
-                                                            const fillColor = isRunning ? "#00C853" : DONE_BLUE;
-                                                            const fillBg   = isRunning ? "rgba(0,200,83,0.82)" : "rgba(27,110,140,0.72)";
-                                                            const elapsedMin = (elapsedH * 60).toFixed(0);
-                                                            return (
-                                                                <div
-                                                                    key={`actual-${job.id}`}
-                                                                    title={isRunning
-                                                                        ? `${job.name} · Running · ${elapsedMin}min elapsed / ${(job.duration*60).toFixed(0)}min planned`
-                                                                        : `${job.name} · Done · ${elapsedMin}min actual / ${(job.duration*60).toFixed(0)}min planned`}
-                                                                    style={{ position: "absolute", left: barStartH * hourWidth, width: bgW, top: ROW_HEIGHT - 20, height: 15, borderRadius: 3, background: "#D4D4D4", border: "1px solid #B0B0B0", borderLeft: "3px solid #909090", overflow: "hidden", pointerEvents: "none", zIndex: 3, boxSizing: "border-box" }}
-                                                                >
-                                                                    <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: Math.min(fillW, bgW), background: fillBg, borderLeft: `3px solid ${fillColor}`, transition: isRunning ? "width 1s linear" : "none" }} />
-                                                                    <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", gap: 3, paddingLeft: 5, zIndex: 1 }}>
-                                                                        {isRunning && <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "#fff", flexShrink: 0, boxShadow: "0 0 0 1px #00C85377" }} />}
-                                                                        <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: fillW > bgW * 0.4 ? "#fff" : "#444", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textShadow: fillW > bgW * 0.4 ? "0 1px 2px rgba(0,0,0,0.35)" : "none" }}>
-                                                                            {job.name}{bgW > 90 ? ` · ${elapsedMin}min` : ""}
-                                                                        </span>
-                                                                    </div>
                                                                 </div>
                                                             );
                                                         })}
@@ -3490,82 +3348,34 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 </div>
 
                                 <div style={styles.analyticsCard}>
-                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                                        <div style={styles.analyticsCardHeader}>
-                                            <ListChecks size={15} color="#1B6E8C" />
-                                            <span style={styles.analyticsCardTitle}>Today's summary</span>
-                                        </div>
-                                        <button
-                                            className="ps-zoombtn"
-                                            title="Export today's summary to Excel"
-                                            onClick={exportTodaySummaryExcel}
-                                            style={{ ...styles.zoomBtn, width: "auto", padding: "0 10px", fontSize: 11, display: "flex", alignItems: "center", gap: 4, color: "#1B6E8C", borderColor: "#1B6E8C" }}
-                                        >
-                                            <FileSpreadsheet size={12} /> Export
-                                        </button>
+                                    <div style={styles.analyticsCardHeader}>
+                                        <AlertOctagon size={15} color="#F0625B" />
+                                        <span style={styles.analyticsCardTitle}>Bottleneck detection</span>
                                     </div>
-
-                                    {/* Job count pills */}
-                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 10 }}>
-                                        {[
-                                            { label: "Total today", value: todaySummary.total, color: "#1B6E8C", bg: "#EBF4F8" },
-                                            { label: "Done", value: todaySummary.done, color: "#21A366", bg: "#E8F6EE" },
-                                            { label: "Running", value: todaySummary.running, color: JOB_RUNNING_GREEN, bg: "#E3F5E9" },
-                                            { label: "Overdue", value: todaySummary.overdue, color: "#C4372E", bg: "#FDECEB" },
-                                        ].map((s) => (
-                                            <div key={s.label} style={{ background: s.bg, borderRadius: 6, padding: "7px 10px", display: "flex", flexDirection: "column", gap: 1 }}>
-                                                <span style={{ fontSize: 20, fontWeight: 700, color: s.color, fontFamily: "'IBM Plex Mono',monospace", lineHeight: 1 }}>{s.value}</span>
-                                                <span style={{ fontSize: 10, color: "#6E6E6E" }}>{s.label}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-
-                                    {/* Completion timing breakdown */}
-                                    <div style={{ fontSize: 11, fontWeight: 600, color: "#595959", marginBottom: 6, paddingTop: 6, borderTop: "1px solid #E5E5E5" }}>
-                                        Completed jobs timing
-                                    </div>
-                                    {todaySummary.completedWithTiming.length === 0 ? (
+                                    {analyticsSummary.bottlenecks.length === 0 ? (
                                         <div style={styles.bottleneckEmpty}>
-                                            <Clock size={14} color="#A0A0A0" />
-                                            no completed jobs with timing data
+                                            <CheckCircle2 size={16} color="#21A366" />
+                                            no scheduling conflicts detected
                                         </div>
                                     ) : (
-                                        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                                            {/* summary row */}
-                                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 4 }}>
-                                                {[
-                                                    { label: "On time", value: todaySummary.onTimeCount, color: "#21A366", bg: "#E8F6EE" },
-                                                    { label: "Early", value: todaySummary.earlyCount, color: "#1B6E8C", bg: "#EBF4F8" },
-                                                    { label: "Delayed", value: todaySummary.delayedCount, color: "#C4372E", bg: "#FDECEB" },
-                                                ].map((s) => (
-                                                    <div key={s.label} style={{ background: s.bg, borderRadius: 4, padding: "3px 8px", display: "flex", alignItems: "center", gap: 4 }}>
-                                                        <span style={{ fontSize: 12, fontWeight: 700, color: s.color, fontFamily: "'IBM Plex Mono',monospace" }}>{s.value}</span>
-                                                        <span style={{ fontSize: 10, color: "#6E6E6E" }}>{s.label}</span>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                            {analyticsSummary.bottlenecks.map(({ resource: r, count }, i) => (
+                                                <div
+                                                    key={r.id}
+                                                    style={styles.bottleneckRow}
+                                                    onClick={() => {
+                                                        setSelectedResourceId(r.id);
+                                                        setSelectedJobId(null);
+                                                    }}
+                                                >
+                                                    <span style={styles.bottleneckRank}>#{i + 1}</span>
+                                                    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+                                                        <span style={styles.utilRowName}>{r.name}</span>
+                                                        <span style={styles.resourceType}>{r.type}</span>
                                                     </div>
-                                                ))}
-                                            </div>
-                                            {todaySummary.delayedCount > 0 && (
-                                                <div style={{ fontSize: 10.5, color: "#C4372E" }}>avg delay: <b>{Math.round(todaySummary.avgDelayMin)}min</b></div>
-                                            )}
-                                            {todaySummary.earlyCount > 0 && (
-                                                <div style={{ fontSize: 10.5, color: "#1B6E8C" }}>avg early: <b>{Math.round(todaySummary.avgEarlyMin)}min</b></div>
-                                            )}
-                                            {/* per-job list */}
-                                            <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 4, maxHeight: 180, overflowY: "auto" }}>
-                                                {todaySummary.completedWithTiming.map((j) => (
-                                                    <div key={j.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 6px", borderRadius: 4, background: j.status === "delayed" ? "#FFF5F5" : j.status === "early" ? "#F0F8FF" : "#F5FBF7" }}>
-                                                        <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, fontWeight: 600, color: "#262626", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{j.name}</span>
-                                                        <span style={{ fontSize: 9.5, color: "#8C8C8C", flexShrink: 0 }}>{(j.plannedH * 60).toFixed(0)}m→{(j.actualH * 60).toFixed(0)}m</span>
-                                                        <span style={{
-                                                            fontSize: 9, fontWeight: 700, flexShrink: 0, borderRadius: 3, padding: "1px 5px",
-                                                            color: j.status === "delayed" ? "#C4372E" : j.status === "early" ? "#1B6E8C" : "#21A366",
-                                                            background: j.status === "delayed" ? "#FDECEB" : j.status === "early" ? "#EBF4F8" : "#E8F6EE",
-                                                        }}>
-                                                            {j.status === "delayed" ? `+${j.diffMin}m` : j.status === "early" ? `${j.diffMin}m` : "✓"}
-                                                        </span>
-                                                    </div>
-                                                ))}
-                                            </div>
+                                                    <span style={styles.bottleneckBadge}>{count} conflict{count !== 1 ? "s" : ""}</span>
+                                                </div>
+                                            ))}
                                         </div>
                                     )}
                                 </div>
@@ -3876,9 +3686,8 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                     const key = toolKey(t);
                                                     const active = selectedTool && toolKey(selectedTool) === key;
                                                     const usedHours = t.actualHours + t.liveHours;
-                                                    const refLife = t.maxLife || TOOL_LIFE_HOURS;
-                                                    const lifePct = Math.min(100, (usedHours / refLife) * 100);
-                                                    const lifeOver = usedHours > refLife;
+                                                    const lifePct = Math.min(100, (usedHours / TOOL_LIFE_HOURS) * 100);
+                                                    const lifeOver = usedHours > TOOL_LIFE_HOURS;
                                                     return (
                                                         <div
                                                             key={key}
@@ -3915,9 +3724,8 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                         const usedHours = t.actualHours + t.liveHours;
                                                         const pct = t.estHours > 0 ? Math.min(100, (usedHours / t.estHours) * 100) : 0;
                                                         const overEstimate = t.estHours > 0 && usedHours > t.estHours;
-                                                        const refLife = t.maxLife || TOOL_LIFE_HOURS;
-                                                        const lifePct = Math.min(100, (usedHours / refLife) * 100);
-                                                        const lifeOver = usedHours > refLife;
+                                                        const lifePct = Math.min(100, (usedHours / TOOL_LIFE_HOURS) * 100);
+                                                        const lifeOver = usedHours > TOOL_LIFE_HOURS;
                                                         return (
                                                             <>
                                                                 <div style={styles.qrCardHeader}>
@@ -3964,26 +3772,21 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                         </div>
                                                                     </div>
                                                                     <div>
-                                                                        <label style={styles.fieldLabel}>tool life (max {refLife.toFixed(1)}h)</label>
+                                                                        <label style={styles.fieldLabel}>tool life ({TOOL_LIFE_HOURS.toFixed(1)}h ref)</label>
                                                                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
                                                                             <div style={{ flex: 1, height: 8, background: "#E1E1E1", borderRadius: 2, overflow: "hidden" }}>
-                                                                                <div style={{ height: "100%", width: `${lifePct}%`, borderRadius: 2, background: lifeOver ? "#F0625B" : lifePct > 75 ? "#E8A33D" : "#21A366" }} />
+                                                                                <div
+                                                                                    style={{
+                                                                                        height: "100%",
+                                                                                        width: `${lifePct}%`,
+                                                                                        borderRadius: 2,
+                                                                                        background: lifeOver ? "#F0625B" : lifePct > 75 ? "#E8A33D" : "#21A366",
+                                                                                    }}
+                                                                                />
                                                                             </div>
                                                                             <span style={{ fontSize: 11, color: lifeOver ? "#C4372E" : "#6E6E6E", fontWeight: lifeOver ? 700 : 400, flexShrink: 0, whiteSpace: "nowrap" }}>
                                                                                 {lifePct.toFixed(0)}%{lifeOver ? " — replace" : ""}
                                                                             </span>
-                                                                        </div>
-                                                                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                                                                            <label style={{ ...styles.fieldLabel, marginBottom: 0, flexShrink: 0 }}>Set max life (h):</label>
-                                                                            <input
-                                                                                type="number" min="0.1" step="0.5"
-                                                                                defaultValue={t.maxLife || TOOL_LIFE_HOURS}
-                                                                                key={toolKey(t)}
-                                                                                style={{ width: 72, fontSize: 12, padding: "3px 6px", border: "1px solid #C8C8C8", borderRadius: 4, background: "#FAFAFA" }}
-                                                                                onBlur={(e) => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) updateToolMaxLife(t, val); }}
-                                                                                onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                                                                            />
-                                                                            <span style={{ fontSize: 11, color: "#8C8C8C" }}>hours</span>
                                                                         </div>
                                                                     </div>
                                                                 </div>
@@ -4035,7 +3838,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                         return topToolsByUsage.map((t) => {
                                                             const key = toolKey(t);
                                                             const heightPct = Math.max(2, (t.usedHours / maxHours) * 100);
-                                                            const over = t.usedHours > (t.maxLife || TOOL_LIFE_HOURS);
+                                                            const over = t.usedHours > TOOL_LIFE_HOURS;
                                                             const active = selectedTool && toolKey(selectedTool) === key;
                                                             return (
                                                                 <div
@@ -4076,48 +3879,10 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                     {activeNav === "qrcodes" && (
                         <div className="ps-scroll" style={styles.analyticsWrap}>
                             <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-
-                                {/* ── STEP 1: Machine bind QR ─────────────────────────────── */}
-                                <div style={{ ...styles.qrIntro, background: "#EFF6FF", borderColor: "#BFDBFE" }}>
-                                    <Cpu size={16} color="#1D4ED8" />
-                                    <span style={{ color: "#1D4ED8" }}>
-                                        <b>ขั้นที่ 1</b> — สแกน QR เครื่องก่อน เพื่อ "ล็อก" ว่ากำลังทำงานที่เครื่องไหน แล้วค่อยสแกน QR งาน
-                                    </span>
-                                </div>
-                                <div style={styles.qrGrid}>
-                                    {resources.map((r) => {
-                                        const origin = typeof window !== "undefined" ? window.location.origin : "";
-                                        const bindUrl = `${origin}/?bind=resource&resource=${r.id}`;
-                                        const bindImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(bindUrl)}`;
-                                        const meta = STATUS_META[r.status];
-                                        return (
-                                            <div key={r.id} style={{ ...styles.qrCard, borderColor: "#BFDBFE" }}>
-                                                <div style={styles.qrCardHeader}>
-                                                    <meta.Icon size={13} color="#1D4ED8" />
-                                                    <span style={styles.qrJobName}>{r.name}</span>
-                                                </div>
-                                                <div style={styles.qrResourceName}>{r.type}</div>
-                                                <div style={styles.qrImages}>
-                                                    <div style={styles.qrImageBlock}>
-                                                        <img src={bindImg} alt={`bind ${r.name}`} style={styles.qrImage} />
-                                                        <div style={{ ...styles.qrLabel, color: "#1D4ED8" }}>
-                                                            <Cpu size={11} /> BIND
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                    {resources.length === 0 && (
-                                        <div style={styles.bottleneckEmpty}>ยังไม่มีเครื่องจักรในระบบ</div>
-                                    )}
-                                </div>
-
-                                {/* ── STEP 2: Job QR ──────────────────────────────────────── */}
-                                <div style={{ ...styles.qrIntro, marginTop: 24 }}>
+                                <div style={styles.qrIntro}>
                                     <QrCode size={16} color="#1B6E8C" />
                                     <span>
-                                        <b>ขั้นที่ 2</b> — สแกน START เพื่อเริ่มงาน / STOP เพื่อหยุดงาน — ระบบจะตรวจว่างานตรงกับเครื่องที่เลือกไว้หรือไม่
+                                        สแกน START เพื่อเริ่มงาน สแกน STOP เพื่อหยุดงาน — ปริ้นแปะไว้หน้างานจริงได้เลย
                                     </span>
                                 </div>
                                 <div style={styles.qrGrid}>
