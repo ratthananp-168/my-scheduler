@@ -181,10 +181,10 @@ function getOperatorName() {
 }
 
 const ALARM_REASONS = [
-    { id: "breakdown", label: "เครื่องขัดข้อง" },
-    { id: "material", label: "ขาดวัตถุดิบ" },
-    { id: "quality", label: "ปัญหาคุณภาพ" },
-    { id: "other", label: "ต้องการความช่วยเหลือ" },
+    { id: "breakdown", label: "Machine breakdown" },
+    { id: "material", label: "Material shortage" },
+    { id: "quality", label: "Quality issue" },
+    { id: "other", label: "Assistance needed" },
 ];
 
 const INITIAL_RESOURCES = [
@@ -263,13 +263,13 @@ function OverridePinSettings({ currentPin, onSave }) {
 
     function handleSave() {
         if (newPin.length > 0 && (newPin.length < 4 || newPin.length > 8)) {
-            setError("PIN ต้องมี 4–8 หลัก"); return;
+            setError("PIN must be 4–8 digits"); return;
         }
         if (!/^\d*$/.test(newPin)) {
-            setError("PIN ต้องเป็นตัวเลขเท่านั้น"); return;
+            setError("PIN must contain digits only"); return;
         }
         if (newPin !== confirmPn) {
-            setError("PIN ไม่ตรงกัน"); return;
+            setError("PINs do not match"); return;
         }
         setMode("saving");
         onSave(newPin);
@@ -279,18 +279,18 @@ function OverridePinSettings({ currentPin, onSave }) {
     if (mode === "view" || mode === "saved") return (
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ flex: 1, background: "#F5F5F5", border: "1px solid #E8E8E8", borderRadius: 4, padding: "10px 14px", fontSize: 13.5, color: currentPin ? "#262626" : "#ADADAD", fontFamily: currentPin ? "'IBM Plex Mono',monospace" : "inherit" }}>
-                {currentPin ? "●".repeat(currentPin.length) : "ยังไม่ได้ตั้ง PIN (ไม่มีการป้องกัน)"}
+                {currentPin ? "●".repeat(currentPin.length) : "No PIN set (no protection)"}
             </div>
             {mode === "saved"
-                ? <div style={{ fontSize: 12.5, color: "#21A366", fontWeight: 600 }}>✓ บันทึกแล้ว</div>
+                ? <div style={{ fontSize: 12.5, color: "#21A366", fontWeight: 600 }}>✓ Saved</div>
                 : <button style={{ background: "#1B6E8C", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => { setNewPin(""); setConfirmPn(""); setError(""); setMode("edit"); }}>
-                    {currentPin ? "เปลี่ยน PIN" : "ตั้ง PIN"}
+                    {currentPin ? "Change PIN" : "Set PIN"}
                 </button>
             }
             {currentPin && mode !== "saved" && (
                 <button style={{ background: "#FDECEB", color: "#C4372E", border: "1px solid #F7CFCB", borderRadius: 4, padding: "9px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
                     onClick={() => { onSave(""); setMode("saved"); setTimeout(() => setMode("view"), 1500); }}>
-                    ลบ PIN
+                    Remove PIN
                 </button>
             )}
         </div>
@@ -300,7 +300,7 @@ function OverridePinSettings({ currentPin, onSave }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div style={{ display: "flex", gap: 10 }}>
                 <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11.5, color: "#6E6E6E", marginBottom: 4 }}>PIN ใหม่ (4–8 หลัก)</div>
+                    <div style={{ fontSize: 11.5, color: "#6E6E6E", marginBottom: 4 }}>New PIN (4–8 digits)</div>
                     <input
                         type="password" inputMode="numeric" maxLength={8}
                         value={newPin} onChange={(e) => { setNewPin(e.target.value.replace(/\D/g, "")); setError(""); }}
@@ -310,7 +310,7 @@ function OverridePinSettings({ currentPin, onSave }) {
                     />
                 </div>
                 <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11.5, color: "#6E6E6E", marginBottom: 4 }}>ยืนยัน PIN</div>
+                    <div style={{ fontSize: 11.5, color: "#6E6E6E", marginBottom: 4 }}>Confirm PIN</div>
                     <input
                         type="password" inputMode="numeric" maxLength={8}
                         value={confirmPn} onChange={(e) => { setConfirmPn(e.target.value.replace(/\D/g, "")); setError(""); }}
@@ -323,10 +323,10 @@ function OverridePinSettings({ currentPin, onSave }) {
             {error && <div style={{ fontSize: 12, color: "#C4372E", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 4, padding: "6px 10px" }}>{error}</div>}
             <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
                 <button style={{ flex: 1, background: "#FFFFFF", border: "1px solid #C8C8C8", color: "#595959", borderRadius: 4, padding: "9px 0", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
-                    onClick={() => setMode("view")}>ยกเลิก</button>
+                    onClick={() => setMode("view")}>Cancel</button>
                 <button style={{ flex: 1.5, background: "#1B6E8C", color: "#fff", border: "none", borderRadius: 4, padding: "9px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: mode === "saving" ? 0.6 : 1 }}
                     onClick={handleSave} disabled={mode === "saving"}>
-                    {mode === "saving" ? "กำลังบันทึก..." : "บันทึก PIN"}
+                    {mode === "saving" ? "Saving..." : "Save PIN"}
                 </button>
             </div>
         </div>
@@ -1781,7 +1781,7 @@ useEffect(() => {
                 // fall through to download fallback below on any other error
             }
         }
-        const chosen = window.prompt("ตั้งชื่อไฟล์ (ไม่ต้องใส่ .xlsx)", defaultName);
+        const chosen = window.prompt("Enter filename (no .xlsx needed)", defaultName);
         if (chosen === null) return;
         XLSX.writeFile(wb, `${sanitizeFilename(chosen || defaultName)}.xlsx`);
     }
@@ -1906,7 +1906,7 @@ useEffect(() => {
                 const sheetName = wb.SheetNames[0];
                 const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
                 if (rows.length === 0) {
-                    setImportError("ไม่พบข้อมูลในไฟล์");
+                    setImportError("No data found in file");
                     return;
                 }
                 let updated = 0;
@@ -1949,12 +1949,12 @@ useEffect(() => {
                     });
                     return next;
                 });
-                setImportError(`นำเข้าสำเร็จ — อัปเดต ${updated} งาน, สร้างใหม่ ${created} งาน`);
+                setImportError(`Import successful — updated ${updated} job${updated !== 1 ? 's' : ''}, created ${created} new job${created !== 1 ? 's' : ''}`);
             } catch (err) {
-                setImportError("อ่านไฟล์ไม่สำเร็จ ตรวจสอบว่าคอลัมน์ตรงกับไฟล์ที่ export ออกมา (Job, Product, Resource, Start, Duration (h), Locked)");
+                setImportError("Failed to read file — check that columns match the exported format (Job, Product, Resource, Start, Duration (h), Locked)");
             }
         };
-        reader.onerror = () => setImportError("อ่านไฟล์ไม่สำเร็จ");
+        reader.onerror = () => setImportError("Failed to read file");
         reader.readAsArrayBuffer(file);
     }
 
@@ -2173,7 +2173,7 @@ useEffect(() => {
         setJobs((js) => js.map((j) => {
             if (j.id !== jobId) return j;
             const changes = j.toolChanges || [];
-            // ต่อจากช่วงล่าสุด ถ้ามี ไม่งั้นเริ่มที่นาที 0
+            // continue from last segment end if available, otherwise start at minute 0
             const last = changes[changes.length - 1];
             const nextStart = last ? last.startMin + last.durationMin : 0;
             const newChange = { id: newId("tc"), toolNumber: "", toolName: "New tool", startMin: nextStart, durationMin: 15 };
@@ -2502,7 +2502,7 @@ useEffect(() => {
                                         className="ps-zoombtn"
                                         style={styles.zoomBtn}
                                         onClick={() => setFocusMode(true)}
-                                        title="focus mode — ซ่อนทุกอย่าง เหลือแค่ตาราง + unscheduled"
+                                        title="Focus mode — hide sidebar, show Gantt + unscheduled pool only"
                                     >
                                         <Maximize2 size={14} />
                                     </button>
@@ -2513,7 +2513,7 @@ useEffect(() => {
                     )}
 
                     {focusMode && (
-                        <button style={styles.focusExitBtn} onClick={() => setFocusMode(false)} title="ออกจาก focus mode">
+                        <button style={styles.focusExitBtn} onClick={() => setFocusMode(false)} title="Exit focus mode">
                             <Minimize2 size={15} />
                         </button>
                     )}
@@ -2524,7 +2524,7 @@ useEffect(() => {
                                 <div className="ps-island-green" style={styles.statusBar}>
                                     <div style={styles.statusBarLabel}>
                                         <Zap size={13} color="#FFFFFF" strokeWidth={2.5} />
-                                        กำลังทำงานอยู่ ({runningNow.length})
+                                        Running ({runningNow.length})
                                     </div>
                                     <div style={styles.statusBarStrip} className="ps-scroll">
                                         {runningNow.map(({ job, resource, isOverride, plannedResource }) => (
@@ -2536,7 +2536,7 @@ useEffect(() => {
                                                     setActiveNav("schedule");
                                                     jumpToJob(job);
                                                 }}
-                                                title={isOverride ? `Override: รันที่ ${resource?.name} แทน ${plannedResource?.name} (ตาม planning)` : undefined}
+                                                title={isOverride ? `Override: running on ${resource?.name} instead of planned ${plannedResource?.name}` : undefined}
                                             >
                                                 <span className="ps-statusbar-dot" style={styles.statusChipDot} />
                                                 <span style={styles.statusChipResource}>{resource ? resource.name : "unscheduled"}</span>
@@ -2555,21 +2555,21 @@ useEffect(() => {
                                 <div className="ps-island-red" style={styles.alarmBar}>
                                     <div style={styles.alarmBarLabel}>
                                         <AlertOctagon size={13} color="#FFFFFF" strokeWidth={2.5} />
-                                        แจ้งเตือน ({activeAlarms.length})
+                                        Alarm ({activeAlarms.length})
                                     </div>
                                     {needsAudioUnlock && (
                                         <button
                                             style={styles.alarmUnlockBtn}
                                             onClick={playAlarmBeep}
-                                            title="เบราว์เซอร์บล็อกเสียงอัตโนมัติ กดเพื่อเปิดเสียงแจ้งเตือน"
+                                            title="Browser blocked autoplay — click to enable alarm sound"
                                         >
-                                            <Volume2 size={12} /> เปิดเสียง
+                                            <Volume2 size={12} /> Enable sound
                                         </button>
                                     )}
                                     <button
                                         style={styles.alarmMuteBtn}
                                         onClick={() => setAlarmSoundEnabled((v) => !v)}
-                                        title={alarmSoundEnabled ? "ปิดเสียงแจ้งเตือน" : "เปิดเสียงแจ้งเตือน"}
+                                        title={alarmSoundEnabled ? "Mute alarm sound" : "Unmute alarm sound"}
                                     >
                                         {alarmSoundEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
                                     </button>
@@ -2588,7 +2588,7 @@ useEffect(() => {
                                                     {r.name}
                                                 </span>
                                                 <span style={styles.statusChipSep}>·</span>
-                                                <span style={styles.alarmChipReason}>{ALARM_REASONS.find((a) => a.id === r.alarmReason)?.label || "แจ้งเตือน"}</span>
+                                                <span style={styles.alarmChipReason}>{ALARM_REASONS.find((a) => a.id === r.alarmReason)?.label || "Alarm"}</span>
                                                 <button style={styles.alarmChipClear} onClick={() => clearAlarm(r.id)} title="clear alarm">
                                                     <X size={11} />
                                                 </button>
@@ -2981,7 +2981,7 @@ useEffect(() => {
                                 ))}
                                 <div style={styles.legendDivider} />
                                 <div style={{ ...styles.legendItem, color: "#8C8C8C", fontStyle: "italic" }}>
-                                    ctrl/cmd + click job เพื่อเลือกหลายอัน
+                                    ctrl/cmd + click to multi-select jobs
                                 </div>
                             </div>
                             )}
@@ -3448,7 +3448,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
                                     <div style={styles.poolLabel}>
                                         unscheduled ({poolJobs.length})
-                                        {isDraggingNC && <span style={{ marginLeft: 8, color: "#1B6E8C", textTransform: "none" }}>วางไฟล์ NC ที่นี่</span>}
+                                        {isDraggingNC && <span style={{ marginLeft: 8, color: "#1B6E8C", textTransform: "none" }}>Drop NC files here</span>}
                                     </div>
                                     <div style={{ display: "flex", gap: 8 }}>
                                         <input
@@ -3463,7 +3463,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                             className="ps-addbtn"
                                             style={{ ...styles.addJobBtn, background: "#404040", border: "1px solid #404040", display: "flex", alignItems: "center", gap: 5 }}
                                             onClick={() => ncFileInputRef.current?.click()}
-                                            title="เลือกไฟล์ NC เพื่อสร้างงานพร้อมเวลาโดยประมาณ"
+                                            title="Select NC files to create jobs with estimated durations"
                                         >
                                             <Upload size={12} /> import NC
                                         </button>
@@ -3885,7 +3885,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                             <div style={styles.eolCard}>
                                                 <div style={styles.eolCardHeader}>
                                                     <AlertOctagon size={15} color={ALARM_RED_DARK} />
-                                                    <span style={styles.analyticsCardTitle}>ใกล้หมดอายุ — ต้องเปลี่ยนเร็วๆ นี้ ({nearEndOfLifeTools.length})</span>
+                                                    <span style={styles.analyticsCardTitle}>Near end of life — replace soon ({nearEndOfLifeTools.length})</span>
                                                 </div>
                                                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                                                     {nearEndOfLifeTools.map((t) => {
@@ -3914,7 +3914,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                         flexShrink: 0,
                                                                     }}
                                                                 >
-                                                                    {critical ? "หมดอายุแล้ว" : `${t.lifePct.toFixed(0)}%`}
+                                                                    {critical ? "Expired" : `${t.lifePct.toFixed(0)}%`}
                                                                 </span>
                                                             </div>
                                                         );
@@ -4176,7 +4176,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 <div style={{ ...styles.qrIntro, background: "#EFF6FF", borderColor: "#BFDBFE" }}>
                                     <Cpu size={16} color="#1D4ED8" />
                                     <span style={{ color: "#1D4ED8" }}>
-                                        <b>ขั้นที่ 1</b> — สแกน QR เครื่องก่อน เพื่อ "ล็อก" ว่ากำลังทำงานที่เครื่องไหน แล้วค่อยสแกน QR งาน
+                                        <b>Step 1</b> — Scan machine QR to lock which machine you are working on, then scan the job QR
                                     </span>
                                 </div>
                                 <div style={styles.qrGrid}>
@@ -4204,7 +4204,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                         );
                                     })}
                                     {resources.length === 0 && (
-                                        <div style={styles.bottleneckEmpty}>ยังไม่มีเครื่องจักรในระบบ</div>
+                                        <div style={styles.bottleneckEmpty}>No machines in system</div>
                                     )}
                                 </div>
 
@@ -4212,7 +4212,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 <div style={{ ...styles.qrIntro, marginTop: 24 }}>
                                     <QrCode size={16} color="#1B6E8C" />
                                     <span>
-                                        <b>ขั้นที่ 2</b> — สแกน START เพื่อเริ่มงาน / STOP เพื่อหยุดงาน — ระบบจะตรวจว่างานตรงกับเครื่องที่เลือกไว้หรือไม่
+                                        <b>Step 2</b> — Scan START to begin / STOP to finish — system will verify job matches selected machine
                                     </span>
                                 </div>
                                 <div style={styles.qrGrid}>
@@ -4249,14 +4249,14 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                         );
                                     })}
                                     {scheduledJobs.length === 0 && (
-                                        <div style={styles.bottleneckEmpty}>ยังไม่มีงานที่ถูกจัดตารางเลย</div>
+                                        <div style={styles.bottleneckEmpty}>No scheduled jobs yet</div>
                                     )}
                                 </div>
 
                                 <div style={{ ...styles.qrIntro, marginTop: 24, borderColor: "#F7CFCB", background: "#FEF6F5" }}>
                                     <AlertOctagon size={16} color={ALARM_RED_DARK} />
                                     <span>
-                                        สแกน ALARM เพื่อแจ้งเตือนปัญหาเครื่องจักร สแกน CLEAR เพื่อยกเลิกแจ้งเตือน — ปริ้นแปะไว้ที่ตัวเครื่องได้เลย
+                                        Scan ALARM to report a machine issue · Scan CLEAR to resolve — print and attach to each machine
                                     </span>
                                 </div>
                                 <div style={styles.qrGrid}>
@@ -4293,7 +4293,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                         );
                                     })}
                                     {resources.length === 0 && (
-                                        <div style={styles.bottleneckEmpty}>ยังไม่มีเครื่องจักรในระบบ</div>
+                                        <div style={styles.bottleneckEmpty}>No machines in system</div>
                                     )}
                                 </div>
                             </div>
@@ -4663,8 +4663,8 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                         <span style={{ fontWeight: 700, fontSize: 15, color: "#262626" }}>Override PIN</span>
                                     </div>
                                     <div style={{ fontSize: 12.5, color: "#6E6E6E", marginBottom: 20, lineHeight: 1.6 }}>
-                                        PIN 4–8 หลักสำหรับยืนยันการ Override งานไปรันบนเครื่องที่ต่างจาก planning
-                                        <br />ถ้าไม่ตั้ง PIN การ Override จะไม่ต้องใส่รหัส
+                                        4–8 digit PIN to authorize overriding a job to run on a different machine than planned
+                                        <br />If no PIN is set, overrides require no confirmation
                                     </div>
 
                                     <OverridePinSettings
@@ -4845,28 +4845,28 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                             {selectedJob.isRunning && (
                                 <div style={styles.runningNote}>
                                     <CheckCircle2 size={13} style={{ marginRight: 6, flexShrink: 0 }} />
-                                    งานนี้กำลังทำงานอยู่ (สแกน START ล่าสุด)
+                                    Job is currently running (last START scan)
                                 </div>
                             )}
 
                             {!selectedJob.isRunning && selectedJob.completed && (
                                 <div style={{ ...styles.runningNote, color: DONE_BLUE, background: "#E3F0FB", border: `1px solid ${DONE_BLUE}55` }}>
                                     <CheckCircle2 size={13} style={{ marginRight: 6, flexShrink: 0 }} />
-                                    งานนี้เสร็จแล้ว{selectedJob.actualRunHours ? ` — ใช้เวลาจริง ${selectedJob.actualRunHours.toFixed(1)}h` : ""}
+                                    Job completed{selectedJob.actualRunHours ? ` — actual run time ${selectedJob.actualRunHours.toFixed(1)}h` : ""}
                                 </div>
                             )}
 
                             {!selectedJob.isRunning && !selectedJob.completed && !isJobBlocked(selectedJob) && selectedJob.resourceId && selectedJob.startHour + selectedJob.duration < nowHour && (
                                 <div style={{ ...styles.runningNote, color: OVERDUE_AMBER, background: OVERDUE_AMBER_BG, border: `1px solid ${OVERDUE_AMBER_BORDER}` }}>
                                     <Clock size={13} style={{ marginRight: 6, flexShrink: 0 }} />
-                                    เลยเวลาที่กำหนดแล้วแต่ยังไม่ได้สแกนเริ่มงาน
+                                    Past scheduled start — not yet scanned to start
                                 </div>
                             )}
 
                             {isJobBlocked(selectedJob) && (
                                 <div style={styles.alarmActiveNote}>
                                     <AlertOctagon size={13} style={{ marginRight: 6, flexShrink: 0 }} />
-                                    เครื่องนี้มีการแจ้งเตือนอยู่ — ห้ามเริ่ม/ลากงานจนกว่าจะเคลียร์
+                                    Machine has an active alarm — start/drag blocked until cleared
                                 </div>
                             )}
 
@@ -4936,10 +4936,10 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                             {selectedResource.alarmActive ? (
                                 <div style={styles.alarmActiveNote}>
                                     <AlertOctagon size={13} style={{ marginRight: 6, flexShrink: 0 }} />
-                                    {ALARM_REASONS.find((a) => a.id === selectedResource.alarmReason)?.label || "แจ้งเตือน"}
+                                    {ALARM_REASONS.find((a) => a.id === selectedResource.alarmReason)?.label || "Alarm"}
                                 </div>
                             ) : (
-                                <div style={{ fontSize: 11.5, color: "#6E6E6E" }}>ไม่มีการแจ้งเตือน</div>
+                                <div style={{ fontSize: 11.5, color: "#6E6E6E" }}>No active alarm</div>
                             )}
 
                             {!selectedResource.alarmActive && (

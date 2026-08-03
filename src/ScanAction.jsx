@@ -4,10 +4,10 @@ import { supabase } from "./supabaseClient";
 import jsQR from "jsqr";
 
 const ALARM_REASONS = [
-    { id: "breakdown", label: "เครื่องขัดข้อง" },
-    { id: "material",  label: "ขาดวัตถุดิบ" },
-    { id: "quality",   label: "ปัญหาคุณภาพ" },
-    { id: "other",     label: "ต้องการความช่วยเหลือ" },
+    { id: "breakdown", label: "Machine breakdown" },
+    { id: "material",  label: "Material shortage" },
+    { id: "quality",   label: "Quality issue" },
+    { id: "other",     label: "Assistance needed" },
 ];
 
 const RUNNING_GREEN      = "#009140";
@@ -117,8 +117,8 @@ export default function ScanAction({ kind, action, id, onDone }) {
             }
         } catch (err) {
             setScanning(false);
-            if (err.name === "NotAllowedError") setCamError("ไม่ได้รับอนุญาตใช้กล้อง — กรุณาอนุญาตในการตั้งค่าเบราว์เซอร์");
-            else setCamError("เปิดกล้องไม่ได้: " + err.message);
+            if (err.name === "NotAllowedError") setCamError("Camera access denied — please allow camera in browser settings.");
+            else setCamError("Cannot open camera: " + err.message);
         }
     }
 
@@ -159,7 +159,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
 
         if (error || !data?.data) {
             setPhase("error");
-            setErrorMsg("โหลดข้อมูลไม่สำเร็จ ลองใหม่อีกครั้ง");
+            setErrorMsg("Failed to load data. Please try again.");
             return;
         }
 
@@ -168,13 +168,13 @@ export default function ScanAction({ kind, action, id, onDone }) {
 
         if (kind === "bind") {
             const res = (sd.resources || []).find((r) => r.id === id);
-            if (!res) { setPhase("error"); setErrorMsg("ไม่พบเครื่องจักรนี้ในระบบ"); return; }
+            if (!res) { setPhase("error"); setErrorMsg("Machine not found in system."); return; }
             setResource(res);
             setPhase("bind_confirm");
 
         } else if (kind === "job") {
             const j = (sd.jobs || []).find((jj) => jj.id === id);
-            if (!j) { setPhase("error"); setErrorMsg("ไม่พบงานนี้ในระบบ"); return; }
+            if (!j) { setPhase("error"); setErrorMsg("Job not found in system."); return; }
             const res = (sd.resources || []).find((r) => r.id === j.resourceId);
             setJob(j);
             setPlannedRes(res || null);
@@ -188,7 +188,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
                 }
                 // check alarm
                 if (res?.alarmActive) {
-                    const label = ALARM_REASONS.find((a) => a.id === res.alarmReason)?.label || "แจ้งเตือน";
+                    const label = ALARM_REASONS.find((a) => a.id === res.alarmReason)?.label || "Alarm";
                     setBlockReason(label);
                     setPhase("blocked");
                     return;
@@ -207,7 +207,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
 
         } else {
             const res = (sd.resources || []).find((r) => r.id === id);
-            if (!res) { setPhase("error"); setErrorMsg("ไม่พบเครื่องจักรนี้ในระบบ"); return; }
+            if (!res) { setPhase("error"); setErrorMsg("Machine not found in system."); return; }
             setResource(res);
             setPhase("alarm_confirm");
         }
@@ -228,17 +228,17 @@ export default function ScanAction({ kind, action, id, onDone }) {
         // always fetch fresh data — allData may be stale if jobs changed after page load
         const { data, error } = await supabase
             .from("schedule_state").select("data").eq("id", 1).single();
-        if (error || !data?.data) { setPhase("error"); setErrorMsg("โหลดข้อมูลไม่สำเร็จ"); return; }
+        if (error || !data?.data) { setPhase("error"); setErrorMsg("Failed to load data. Please try again."); return; }
 
         const sd = data.data;
         const j = (sd.jobs || []).find((jj) => jj.id === jobId);
-        if (!j) { setPhase("error"); setErrorMsg("ไม่พบงาน id: " + jobId); return; }
+        if (!j) { setPhase("error"); setErrorMsg("Job not found, id: " + jobId); return; }
         const planned = (sd.resources || []).find((r) => r.id === j.resourceId) || null;
         setJob(j);
         setPlannedRes(planned);
 
         if (planned?.alarmActive) {
-            const label = ALARM_REASONS.find((a) => a.id === planned.alarmReason)?.label || "แจ้งเตือน";
+            const label = ALARM_REASONS.find((a) => a.id === planned.alarmReason)?.label || "Alarm";
             setBlockReason(label);
             setPhase("blocked");
             return;
@@ -258,7 +258,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
         setPhase("working");
         const { data, error } = await supabase
             .from("schedule_state").select("data").eq("id", 1).single();
-        if (error || !data?.data) { setPhase("error"); setErrorMsg("โหลดข้อมูลไม่สำเร็จ"); return; }
+        if (error || !data?.data) { setPhase("error"); setErrorMsg("Failed to load data. Please try again."); return; }
 
         const nowIso = new Date().toISOString();
         // override → record actualResourceId (where it's actually running)
@@ -277,7 +277,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
         const { error: ue } = await supabase
             .from("schedule_state")
             .update({ data: { ...data.data, jobs }, updated_at: nowIso }).eq("id", 1);
-        if (ue) { setPhase("error"); setErrorMsg("บันทึกสถานะไม่สำเร็จ"); return; }
+        if (ue) { setPhase("error"); setErrorMsg("Failed to save status. Please try again."); return; }
 
         // verify write: log what was saved so we can confirm actualResourceId is set
         const saved = jobs.find((j) => j.id === targetJob.id);
@@ -289,7 +289,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
         setPhase("working");
         const { data, error } = await supabase
             .from("schedule_state").select("data").eq("id", 1).single();
-        if (error || !data?.data) { setPhase("error"); setErrorMsg("โหลดข้อมูลไม่สำเร็จ"); return; }
+        if (error || !data?.data) { setPhase("error"); setErrorMsg("Failed to load data. Please try again."); return; }
 
         const nowIso = new Date().toISOString();
         const toolHistory = Array.isArray(data.data.toolHistory)
@@ -325,7 +325,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
 
         const { error: ue } = await supabase.from("schedule_state")
             .update({ data: { ...data.data, jobs, toolHistory }, updated_at: nowIso }).eq("id", 1);
-        if (ue) { setPhase("error"); setErrorMsg("บันทึกสถานะไม่สำเร็จ"); return; }
+        if (ue) { setPhase("error"); setErrorMsg("Failed to save status. Please try again."); return; }
         setPhase("done");
     }
 
@@ -333,7 +333,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
         setPhase("working");
         const { data, error } = await supabase
             .from("schedule_state").select("data").eq("id", 1).single();
-        if (error || !data?.data) { setPhase("error"); setErrorMsg("โหลดข้อมูลไม่สำเร็จ"); return; }
+        if (error || !data?.data) { setPhase("error"); setErrorMsg("Failed to load data. Please try again."); return; }
 
         const resources = (data.data.resources || []).map((r) =>
             r.id !== id ? r : action === "raise"
@@ -342,7 +342,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
         );
         const { error: ue } = await supabase.from("schedule_state")
             .update({ data: { ...data.data, resources }, updated_at: new Date().toISOString() }).eq("id", 1);
-        if (ue) { setPhase("error"); setErrorMsg("บันทึกสถานะไม่สำเร็จ"); return; }
+        if (ue) { setPhase("error"); setErrorMsg("Failed to save status. Please try again."); return; }
         setPhase("done");
     }
 
@@ -380,23 +380,23 @@ export default function ScanAction({ kind, action, id, onDone }) {
 
                 {/* Loading */}
                 {phase === "loading" && (
-                    <><Loader2 className="ps-spin" size={40} color="#1B6E8C" /><div style={styles.title}>กำลังโหลดข้อมูล...</div></>
+                    <><Loader2 className="ps-spin" size={40} color="#1B6E8C" /><div style={styles.title}>Loading...</div></>
                 )}
 
                 {/* ── Step 1: confirm machine ── */}
                 {phase === "bind_confirm" && resource && (
                     <>
-                        <div style={{ ...styles.badge, background: BIND_BG, color: BIND_BLUE }}>ขั้นที่ 1 / 2 — เลือกเครื่อง</div>
+                        <div style={{ ...styles.badge, background: BIND_BG, color: BIND_BLUE }}>Step 1 / 2 — Select Machine</div>
                         <div style={{ ...styles.iconWrap, background: BIND_BG }}>
                             <Cpu size={28} color={BIND_BLUE} strokeWidth={2.5} />
                         </div>
                         <div style={styles.mono}>{resource.name}</div>
                         <div style={styles.sub}>{resource.type}</div>
-                        <div style={{ ...styles.title, marginTop: 8 }}>ยืนยันเลือกเครื่องนี้?</div>
+                        <div style={{ ...styles.title, marginTop: 8 }}>Confirm machine selection?</div>
                         <div style={styles.btnRow}>
-                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>ยกเลิก</button>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
                             <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: BIND_BLUE }} onClick={handleConfirmBind}>
-                                ยืนยัน → สแกนงาน
+                                Confirm → Scan Job
                             </button>
                         </div>
                     </>
@@ -405,7 +405,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
                 {/* ── Step 2: camera viewfinder ── */}
                 {phase === "bind_scanning" && resource && (
                     <>
-                        <div style={{ ...styles.badge, background: BIND_BG, color: BIND_BLUE }}>ขั้นที่ 2 / 2 — สแกน QR งาน</div>
+                        <div style={{ ...styles.badge, background: BIND_BG, color: BIND_BLUE }}>Step 2 / 2 — Scan Job QR</div>
                         <div style={styles.mono}>{resource.name}</div>
 
                         {/* viewfinder */}
@@ -427,42 +427,42 @@ export default function ScanAction({ kind, action, id, onDone }) {
                         {!scanning && !camError && (
                             <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: BIND_BLUE, width: "100%", marginTop: 10 }}
                                 onClick={startCamera}>
-                                <Camera size={15} style={{ marginRight: 6 }} /> เปิดกล้อง
+                                <Camera size={15} style={{ marginRight: 6 }} /> Open Camera
                             </button>
                         )}
 
-                        <div style={styles.sub}>หันกล้องไปที่ QR งาน (START) เพื่อเริ่มทำงาน</div>
-                        <button className="ps-btn-cancel" style={{ ...styles.cancelBtn, width: "100%" }} onClick={onDone}>ยกเลิก</button>
+                        <div style={styles.sub}>Point camera at Job QR (START) to begin work</div>
+                        <button className="ps-btn-cancel" style={{ ...styles.cancelBtn, width: "100%" }} onClick={onDone}>Cancel</button>
                     </>
                 )}
 
                 {/* ── Mismatch ── */}
                 {phase === "bind_mismatch" && job && (
                     <>
-                        <div style={{ ...styles.badge, background: "#FEF3C7", color: WARN_AMBER }}>⚠ งานไม่ตรงกับเครื่องที่เลือก</div>
+                        <div style={{ ...styles.badge, background: "#FEF3C7", color: WARN_AMBER }}>⚠ Job does not match selected machine</div>
                         <div style={{ ...styles.iconWrap, background: "#FEF3C7" }}>
                             <AlertCircle size={28} color={WARN_AMBER} strokeWidth={2.5} />
                         </div>
                         <div style={styles.mono}>{job.name}</div>
                         <div style={styles.mismatchTable}>
                             <div style={styles.mismatchRow}>
-                                <span style={styles.mismatchLabel}>เครื่องที่สแกน</span>
+                                <span style={styles.mismatchLabel}>Scanned machine</span>
                                 <span style={{ ...styles.mismatchVal, color: WARN_AMBER }}>{resource?.name || "—"}</span>
                             </div>
                             <div style={{ ...styles.mismatchRow, borderTop: "1px solid #E8E8E8", paddingTop: 6 }}>
-                                <span style={styles.mismatchLabel}>เครื่องตาม Planning</span>
-                                <span style={{ ...styles.mismatchVal, color: RUNNING_GREEN_DARK }}>{plannedRes?.name || "ไม่ได้กำหนด"}</span>
+                                <span style={styles.mismatchLabel}>Planned machine</span>
+                                <span style={{ ...styles.mismatchVal, color: RUNNING_GREEN_DARK }}>{plannedRes?.name || "Unassigned"}</span>
                             </div>
                         </div>
                         <div style={styles.warnBox}>
-                            งานนี้ถูกวางแผนไว้บน <b>{plannedRes?.name || "เครื่องอื่น"}</b><br />
-                            กรุณาตรวจสอบกับ Supervisor ก่อนดำเนินการต่อ
+                            This job is planned on <b>{plannedRes?.name || "another machine"}</b><br />
+                            Please verify with Supervisor before proceeding.
                         </div>
                         <div style={styles.btnRow}>
-                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>ยกเลิก</button>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
                             <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: WARN_AMBER, fontSize: 12.5 }}
                                 onClick={() => { setPinInput(""); setPinError(""); overridePin ? setShowPinModal(true) : setPhase("bind_job_confirm"); }}>
-                                Override &amp; เริ่มงาน
+                                Override &amp; Start
                             </button>
                         </div>
                     </>
@@ -471,7 +471,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
                 {/* ── Bind job confirm ── */}
                 {phase === "bind_job_confirm" && job && (
                     <>
-                        <div style={{ ...styles.badge, background: "#E3F5E9", color: RUNNING_GREEN_DARK }}>ขั้นที่ 2 / 2 — เริ่มงาน</div>
+                        <div style={{ ...styles.badge, background: "#E3F5E9", color: RUNNING_GREEN_DARK }}>Step 2 / 2 — Start Job</div>
                         <div style={{ ...styles.iconWrap, background: "#E3F5E9" }}>
                             <Play size={28} color={RUNNING_GREEN_DARK} strokeWidth={2.5} />
                         </div>
@@ -479,14 +479,14 @@ export default function ScanAction({ kind, action, id, onDone }) {
                         <div style={styles.sub}>{resource?.name || plannedRes?.name} · {job.product}</div>
                         {isOverride && (
                             <div style={{ fontSize: 11, color: WARN_AMBER, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 5, padding: "4px 10px", marginTop: 2 }}>
-                                ⚠ Override — รันที่ {resource?.name} แทน {plannedRes?.name}
+                                ⚠ Override — running on {resource?.name} instead of {plannedRes?.name}
                             </div>
                         )}
-                        <div style={{ ...styles.title, marginTop: 8 }}>ยืนยันเริ่มงาน?</div>
+                        <div style={{ ...styles.title, marginTop: 8 }}>Confirm start job?</div>
                         <div style={styles.btnRow}>
-                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>ยกเลิก</button>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
                             <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: RUNNING_GREEN }}
-                                onClick={() => handleConfirmJobStart(job)}>ยืนยันเริ่มงาน</button>
+                                onClick={() => handleConfirmJobStart(job)}>Confirm Start</button>
                         </div>
                     </>
                 )}
@@ -495,21 +495,21 @@ export default function ScanAction({ kind, action, id, onDone }) {
                 {phase === "no_bind" && (
                     <>
                         <div style={{ ...styles.badge, background: "#FEF3C7", color: WARN_AMBER }}>
-                            ⚠ ยังไม่ได้สแกนเครื่อง
+                            ⚠ Machine not scanned yet
                         </div>
                         <div style={{ ...styles.iconWrap, background: "#FEF3C7" }}>
                             <Cpu size={28} color={WARN_AMBER} strokeWidth={2.5} />
                         </div>
                         <div style={styles.mono}>{job?.name}</div>
                         <div style={{ ...styles.title, color: WARN_AMBER, marginTop: 8 }}>
-                            กรุณาสแกนเครื่องก่อน
+                            Please scan machine first
                         </div>
                         <div style={styles.sub}>
-                            ต้องสแกน QR เครื่อง (BIND) ก่อนเสมอ<br />
-                            แล้วค่อยสแกน QR งาน (START)
+                            Always scan machine QR (BIND) first<br />
+                            then scan job QR (START)
                         </div>
                         <button className="ps-btn-primary" style={styles.btn} onClick={onDone}>
-                            กลับไปสแกนเครื่อง
+                            Go scan machine
                         </button>
                     </>
                 )}
@@ -517,30 +517,30 @@ export default function ScanAction({ kind, action, id, onDone }) {
                 {/* ── Standalone mismatch (job scanned via URL, bound resource doesn't match) ── */}
                 {phase === "standalone_mismatch" && job && (
                     <>
-                        <div style={{ ...styles.badge, background: "#FEF3C7", color: WARN_AMBER }}>⚠ งานไม่ตรงกับเครื่องที่เลือก</div>
+                        <div style={{ ...styles.badge, background: "#FEF3C7", color: WARN_AMBER }}>⚠ Job does not match selected machine</div>
                         <div style={{ ...styles.iconWrap, background: "#FEF3C7" }}>
                             <AlertCircle size={28} color={WARN_AMBER} strokeWidth={2.5} />
                         </div>
                         <div style={styles.mono}>{job.name}</div>
                         <div style={styles.mismatchTable}>
                             <div style={styles.mismatchRow}>
-                                <span style={styles.mismatchLabel}>เครื่องที่สแกน</span>
+                                <span style={styles.mismatchLabel}>Scanned machine</span>
                                 <span style={{ ...styles.mismatchVal, color: WARN_AMBER }}>{boundForStandalone?.name || "—"}</span>
                             </div>
                             <div style={{ ...styles.mismatchRow, borderTop: "1px solid #E8E8E8", paddingTop: 6 }}>
-                                <span style={styles.mismatchLabel}>เครื่องตาม Planning</span>
-                                <span style={{ ...styles.mismatchVal, color: RUNNING_GREEN_DARK }}>{plannedRes?.name || "ไม่ได้กำหนด"}</span>
+                                <span style={styles.mismatchLabel}>Planned machine</span>
+                                <span style={{ ...styles.mismatchVal, color: RUNNING_GREEN_DARK }}>{plannedRes?.name || "Unassigned"}</span>
                             </div>
                         </div>
                         <div style={styles.warnBox}>
-                            งานนี้ถูกวางแผนไว้บน <b>{plannedRes?.name || "เครื่องอื่น"}</b><br />
-                            กรุณาตรวจสอบกับ Supervisor ก่อนดำเนินการต่อ
+                            This job is planned on <b>{plannedRes?.name || "another machine"}</b><br />
+                            Please verify with Supervisor before proceeding.
                         </div>
                         <div style={styles.btnRow}>
-                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>ยกเลิก</button>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
                             <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: WARN_AMBER, fontSize: 12.5 }}
                                 onClick={() => { setPinInput(""); setPinError(""); overridePin ? setShowPinModal(true) : setPhase("job_confirm"); }}>
-                                Override &amp; เริ่มงาน
+                                Override &amp; Start
                             </button>
                         </div>
                     </>
@@ -555,11 +555,11 @@ export default function ScanAction({ kind, action, id, onDone }) {
                         </div>
                         <div style={styles.mono}>{job.name}</div>
                         <div style={styles.sub}>{resDisplay} · {job.product}</div>
-                        <div style={{ ...styles.title, marginTop: 8 }}>ยืนยัน{isStart ? "เริ่มงาน" : "หยุดงาน"}?</div>
+                        <div style={{ ...styles.title, marginTop: 8 }}>Confirm {isStart ? "start" : "stop"} job?</div>
                         <div style={styles.btnRow}>
-                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>ยกเลิก</button>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
                             <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: isStart ? RUNNING_GREEN : "#C4372E" }}
-                                onClick={handleConfirmJob}>{isStart ? "ยืนยันเริ่มงาน" : "ยืนยันหยุดงาน"}</button>
+                                onClick={handleConfirmJob}>{isStart ? "Confirm Start" : "Confirmหยุดงาน"}</button>
                         </div>
                     </>
                 )}
@@ -573,16 +573,16 @@ export default function ScanAction({ kind, action, id, onDone }) {
                         </div>
                         <div style={styles.mono}>{resource.name}</div>
                         <div style={styles.sub}>{resource.type}</div>
-                        <div style={{ ...styles.title, marginTop: 8 }}>ยืนยัน{isRaise ? "แจ้งเตือน" : "ยกเลิกแจ้งเตือน"}?</div>
+                        <div style={{ ...styles.title, marginTop: 8 }}>Confirm{isRaise ? "Alarm" : "Cancelแจ้งเตือน"}?</div>
                         {isRaise && (
                             <select className="ps-scan-select" value={alarmReason} onChange={(e) => setAlarmReason(e.target.value)}>
                                 {ALARM_REASONS.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
                             </select>
                         )}
                         <div style={styles.btnRow}>
-                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>ยกเลิก</button>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
                             <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: isRaise ? ALARM_RED : RUNNING_GREEN }}
-                                onClick={handleConfirmAlarm}>{isRaise ? "ยืนยันแจ้งเตือน" : "ยืนยันยกเลิก"}</button>
+                                onClick={handleConfirmAlarm}>{isRaise ? "Confirm Alarm" : "Confirm Clear"}</button>
                         </div>
                     </>
                 )}
@@ -595,15 +595,15 @@ export default function ScanAction({ kind, action, id, onDone }) {
                         </div>
                         <div style={styles.mono}>{job?.name}</div>
                         <div style={styles.sub}>{resDisplay}</div>
-                        <div style={{ ...styles.title, color: ALARM_RED_DARK, marginTop: 8 }}>ไม่สามารถเริ่มงานได้</div>
-                        <div style={styles.sub}>เครื่อง {resDisplay} มีการแจ้งเตือน: {blockReason}<br />กรุณาเคลียร์ก่อนเริ่มงาน</div>
-                        <button className="ps-btn-primary ps-scan-btn" style={styles.btn} onClick={onDone}>เข้าดูตารางงาน</button>
+                        <div style={{ ...styles.title, color: ALARM_RED_DARK, marginTop: 8 }}>Cannot Start Job</div>
+                        <div style={styles.sub}>Machine {resDisplay} has active alarm: {blockReason}<br />Please clear the alarm before starting.</div>
+                        <button className="ps-btn-primary ps-scan-btn" style={styles.btn} onClick={onDone}>Back to Schedule</button>
                     </>
                 )}
 
                 {/* ── Working ── */}
                 {phase === "working" && (
-                    <><Loader2 className="ps-spin" size={40} color="#1B6E8C" /><div style={styles.title}>กำลังบันทึกสถานะ...</div></>
+                    <><Loader2 className="ps-spin" size={40} color="#1B6E8C" /><div style={styles.title}>Saving...</div></>
                 )}
 
                 {/* ── Done ── */}
@@ -618,10 +618,10 @@ export default function ScanAction({ kind, action, id, onDone }) {
                         </div>
                         <div style={styles.mono}>{job?.name || resource?.name}</div>
                         <div style={{ ...styles.title, color: doneIsGreen ? "#21A366" : "#C4372E" }}>
-                            {isStop ? "หยุดทำงานแล้ว" : isRaise ? "แจ้งเตือนแล้ว" : isClear ? "ยกเลิกแจ้งเตือนแล้ว" : "เริ่มทำงานแล้ว"}
+                            {isStop ? "Stopped" : isRaise ? "Alarm raised" : isClear ? "Alarm cleared" : "Started"}
                         </div>
                         <div style={styles.sub}>{new Date().toLocaleString("th-TH")}</div>
-                        <button className="ps-btn-primary" style={styles.btn} onClick={onDone}>เข้าดูตารางงาน</button>
+                        <button className="ps-btn-primary" style={styles.btn} onClick={onDone}>Back to Schedule</button>
                     </>
                 )}
 
@@ -631,9 +631,9 @@ export default function ScanAction({ kind, action, id, onDone }) {
                         <div style={{ ...styles.iconWrap, background: "#FDECEB" }}>
                             <AlertTriangle size={30} color="#C4372E" />
                         </div>
-                        <div style={{ ...styles.title, color: "#C4372E" }}>เกิดข้อผิดพลาด</div>
+                        <div style={{ ...styles.title, color: "#C4372E" }}>An error occurred</div>
                         <div style={styles.sub}>{errorMsg}</div>
-                        <button className="ps-btn-primary" style={styles.btn} onClick={onDone}>เข้าดูตารางงาน</button>
+                        <button className="ps-btn-primary" style={styles.btn} onClick={onDone}>Back to Schedule</button>
                     </>
                 )}
             </div>
@@ -645,9 +645,9 @@ export default function ScanAction({ kind, action, id, onDone }) {
                         <div style={{ width: 48, height: 48, borderRadius: 8, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
                             <Lock size={24} color={WARN_AMBER} />
                         </div>
-                        <div style={{ fontWeight: 700, fontSize: 16, color: "#262626", marginBottom: 4 }}>ใส่ Override PIN</div>
+                        <div style={{ fontWeight: 700, fontSize: 16, color: "#262626", marginBottom: 4 }}>Enter Override PIN</div>
                         <div style={{ fontSize: 12.5, color: "#6E6E6E", marginBottom: 16, lineHeight: 1.6 }}>
-                            งานนี้รันต่างจาก planning<br />กรุณายืนยันด้วย Supervisor PIN
+                            This job runs on a different machine than planned.<br />Supervisor PIN required to override.
                         </div>
                         <input
                             type="password"
@@ -660,7 +660,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
                                     if (pinInput === overridePin) {
                                         setShowPinModal(false);
                                         setPhase(phase === "bind_mismatch" || kind === "bind" ? "bind_job_confirm" : "job_confirm");
-                                    } else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
+                                    } else { setPinError("Incorrect PIN"); setPinInput(""); }
                                 }
                             }}
                             autoFocus
@@ -676,7 +676,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
                         <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
                             <button style={{ flex: 1, background: "#FFFFFF", border: "1px solid #C8C8C8", color: "#595959", borderRadius: 6, padding: "11px 0", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}
                                 onClick={() => { setShowPinModal(false); setPinInput(""); setPinError(""); }}>
-                                ยกเลิก
+                                Cancel
                             </button>
                             <button style={{ flex: 1.5, background: WARN_AMBER, color: "#FFFFFF", border: "none", borderRadius: 6, padding: "11px 0", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}
                                 onClick={() => {
@@ -684,9 +684,9 @@ export default function ScanAction({ kind, action, id, onDone }) {
                                         setShowPinModal(false);
                                         // bind flow → bind_job_confirm, standalone flow → job_confirm
                                         setPhase(phase === "bind_mismatch" || kind === "bind" ? "bind_job_confirm" : "job_confirm");
-                                    } else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
+                                    } else { setPinError("Incorrect PIN"); setPinInput(""); }
                                 }}>
-                                ยืนยัน
+                                Confirm
                             </button>
                         </div>
                     </div>
