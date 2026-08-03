@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { CheckCircle2, XCircle, Loader2, AlertTriangle, AlertOctagon, Play, Square, Cpu, AlertCircle, Camera, CameraOff } from "lucide-react";
 import { supabase } from "./supabaseClient";
+import jsQR from "jsqr";
 
 const ALARM_REASONS = [
     { id: "breakdown", label: "เครื่องขัดข้อง" },
@@ -16,21 +17,6 @@ const ALARM_RED_DARK     = "#D6180A";
 const WARN_AMBER         = "#B45309";
 const BIND_BLUE          = "#1D4ED8";
 const BIND_BG            = "#EFF6FF";
-
-// Load jsQR from CDN once
-let jsQRPromise = null;
-function loadJsQR() {
-    if (jsQRPromise) return jsQRPromise;
-    jsQRPromise = new Promise((resolve, reject) => {
-        if (window.jsQR) { resolve(window.jsQR); return; }
-        const s = document.createElement("script");
-        s.src = "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js";
-        s.onload  = () => resolve(window.jsQR);
-        s.onerror = () => reject(new Error("jsQR load failed"));
-        document.head.appendChild(s);
-    });
-    return jsQRPromise;
-}
 
 // Parse QR URL → { kind, jobId } or null
 function parseQRUrl(text) {
@@ -77,7 +63,6 @@ export default function ScanAction({ kind, action, id, onDone }) {
         setCamError("");
         setScanning(true);
         try {
-            await loadJsQR();
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
                 audio: false,
@@ -113,7 +98,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
             const ctx  = canvas.getContext("2d");
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             const img  = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const code = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
+            const code = jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
             if (code?.data) {
                 const parsed = parseQRUrl(code.data);
                 if (parsed) {
@@ -534,6 +519,3 @@ const styles = {
     confirmBtn: { flex:1.5, border:"none", color:"#FFFFFF", borderRadius:3, padding:"12px 0", fontSize:13.5, fontWeight:700, cursor:"pointer", fontFamily:"'Segoe UI','Inter',sans-serif", display:"flex", alignItems:"center", justifyContent:"center" },
     btn: { marginTop:16, width:"100%", background:"#1B6E8C", color:"#FFFFFF", border:"none", borderRadius:3, padding:"11px 0", fontSize:13.5, fontWeight:600, cursor:"pointer", fontFamily:"'Segoe UI','Inter',sans-serif" },
 };
-
-// silence unused import warning
-const _ALARM_RED_DARK = ALARM_RED_DARK;
