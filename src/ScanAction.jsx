@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import { CheckCircle2, XCircle, Loader2, AlertTriangle, AlertOctagon, Play, Square, Cpu, AlertCircle, Camera, CameraOff } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, AlertTriangle, AlertOctagon, Play, Square, Cpu, AlertCircle, Camera, CameraOff, Lock } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import jsQR from "jsqr";
 
@@ -49,6 +49,10 @@ export default function ScanAction({ kind, action, id, onDone }) {
     const [camError,    setCamError]    = useState("");
     const [scanning,    setScanning]    = useState(false);
     const [isOverride,  setIsOverride]  = useState(false);
+    const [showPinModal, setShowPinModal] = useState(false);
+    const [overridePin,  setOverridePinVal] = useState("");
+    const [pinInput,     setPinInput]     = useState("");
+    const [pinError,     setPinError]     = useState("");
 
     const videoRef   = useRef(null);
     const canvasRef  = useRef(null);
@@ -188,6 +192,10 @@ export default function ScanAction({ kind, action, id, onDone }) {
             setPhase("blocked");
             return;
         }
+
+        // fetch override PIN setting
+        const pin = sd.appConfig?.overridePin || "";
+        setOverridePinVal(pin);
 
         const match = planned && boundResource && planned.id === boundResource.id;
         setIsOverride(!match);
@@ -399,7 +407,7 @@ export default function ScanAction({ kind, action, id, onDone }) {
                         <div style={styles.btnRow}>
                             <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>ยกเลิก</button>
                             <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: WARN_AMBER, fontSize: 12.5 }}
-                                onClick={() => setPhase("bind_job_confirm")}>
+                                onClick={() => { setPinInput(""); setPinError(""); overridePin ? setShowPinModal(true) : setPhase("bind_job_confirm"); }}>
                                 Override &amp; เริ่มงาน
                             </button>
                         </div>
@@ -520,6 +528,56 @@ export default function ScanAction({ kind, action, id, onDone }) {
                     </>
                 )}
             </div>
+
+            {/* ── PIN Modal overlay ── */}
+            {showPinModal && (
+                <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 24 }}>
+                    <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "28px 24px", width: "100%", maxWidth: 320, boxShadow: "0 20px 60px rgba(0,0,0,0.25)", textAlign: "center" }}>
+                        <div style={{ width: 48, height: 48, borderRadius: 8, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
+                            <Lock size={24} color={WARN_AMBER} />
+                        </div>
+                        <div style={{ fontWeight: 700, fontSize: 16, color: "#262626", marginBottom: 4 }}>ใส่ Override PIN</div>
+                        <div style={{ fontSize: 12.5, color: "#6E6E6E", marginBottom: 16, lineHeight: 1.6 }}>
+                            งานนี้รันต่างจาก planning<br />กรุณายืนยันด้วย Supervisor PIN
+                        </div>
+                        <input
+                            type="password"
+                            inputMode="numeric"
+                            maxLength={8}
+                            value={pinInput}
+                            onChange={(e) => { setPinInput(e.target.value.replace(/\D/g, "")); setPinError(""); }}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                    if (pinInput === overridePin) { setShowPinModal(false); setPhase("bind_job_confirm"); }
+                                    else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
+                                }
+                            }}
+                            autoFocus
+                            style={{ width: "100%", boxSizing: "border-box", border: pinError ? "2px solid #C4372E" : "2px solid #E8E8E8", borderRadius: 8, padding: "14px 12px", fontSize: 28, letterSpacing: 12, textAlign: "center", fontFamily: "'IBM Plex Mono',monospace", outline: "none", marginBottom: 8 }}
+                            placeholder="••••"
+                            autoComplete="off"
+                        />
+                        {pinError && (
+                            <div style={{ fontSize: 12, color: "#C4372E", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 5, padding: "6px 10px", marginBottom: 8 }}>
+                                {pinError}
+                            </div>
+                        )}
+                        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                            <button style={{ flex: 1, background: "#FFFFFF", border: "1px solid #C8C8C8", color: "#595959", borderRadius: 6, padding: "11px 0", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}
+                                onClick={() => { setShowPinModal(false); setPinInput(""); setPinError(""); }}>
+                                ยกเลิก
+                            </button>
+                            <button style={{ flex: 1.5, background: WARN_AMBER, color: "#FFFFFF", border: "none", borderRadius: 6, padding: "11px 0", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}
+                                onClick={() => {
+                                    if (pinInput === overridePin) { setShowPinModal(false); setPhase("bind_job_confirm"); }
+                                    else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
+                                }}>
+                                ยืนยัน
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

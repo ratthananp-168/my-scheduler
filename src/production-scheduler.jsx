@@ -12,6 +12,7 @@ const NAV_ITEMS = [
     { id: "qrcodes", label: "QR Codes", Icon: QrCode },
     { id: "shifts", label: "Shifts", Icon: Settings },
     { id: "history", label: "History", Icon: HistoryIcon },
+    { id: "settings", label: "Settings", Icon: Settings },
 ];
 
 const DAY_ABBR_LOCALE = { weekday: "short" };
@@ -252,6 +253,86 @@ function toDateInputValue(date) {
     return `${y}-${m}-${d}`;
 }
 
+
+// ── Override PIN Settings component ──────────────────────────────────────────
+function OverridePinSettings({ currentPin, onSave }) {
+    const [mode,      setMode]      = useState("view"); // "view" | "edit" | "saving" | "saved"
+    const [newPin,    setNewPin]    = useState("");
+    const [confirmPn, setConfirmPn] = useState("");
+    const [error,     setError]     = useState("");
+
+    function handleSave() {
+        if (newPin.length > 0 && (newPin.length < 4 || newPin.length > 8)) {
+            setError("PIN ต้องมี 4–8 หลัก"); return;
+        }
+        if (!/^\d*$/.test(newPin)) {
+            setError("PIN ต้องเป็นตัวเลขเท่านั้น"); return;
+        }
+        if (newPin !== confirmPn) {
+            setError("PIN ไม่ตรงกัน"); return;
+        }
+        setMode("saving");
+        onSave(newPin);
+        setTimeout(() => { setMode("saved"); setTimeout(() => setMode("view"), 1500); }, 300);
+    }
+
+    if (mode === "view" || mode === "saved") return (
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ flex: 1, background: "#F5F5F5", border: "1px solid #E8E8E8", borderRadius: 4, padding: "10px 14px", fontSize: 13.5, color: currentPin ? "#262626" : "#ADADAD", fontFamily: currentPin ? "'IBM Plex Mono',monospace" : "inherit" }}>
+                {currentPin ? "●".repeat(currentPin.length) : "ยังไม่ได้ตั้ง PIN (ไม่มีการป้องกัน)"}
+            </div>
+            {mode === "saved"
+                ? <div style={{ fontSize: 12.5, color: "#21A366", fontWeight: 600 }}>✓ บันทึกแล้ว</div>
+                : <button style={{ background: "#1B6E8C", color: "#fff", border: "none", borderRadius: 4, padding: "9px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => { setNewPin(""); setConfirmPn(""); setError(""); setMode("edit"); }}>
+                    {currentPin ? "เปลี่ยน PIN" : "ตั้ง PIN"}
+                </button>
+            }
+            {currentPin && mode !== "saved" && (
+                <button style={{ background: "#FDECEB", color: "#C4372E", border: "1px solid #F7CFCB", borderRadius: 4, padding: "9px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+                    onClick={() => { onSave(""); setMode("saved"); setTimeout(() => setMode("view"), 1500); }}>
+                    ลบ PIN
+                </button>
+            )}
+        </div>
+    );
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11.5, color: "#6E6E6E", marginBottom: 4 }}>PIN ใหม่ (4–8 หลัก)</div>
+                    <input
+                        type="password" inputMode="numeric" maxLength={8}
+                        value={newPin} onChange={(e) => { setNewPin(e.target.value.replace(/\D/g, "")); setError(""); }}
+                        style={{ width: "100%", boxSizing: "border-box", border: "1px solid #C8C8C8", borderRadius: 4, padding: "9px 12px", fontSize: 18, letterSpacing: 6, fontFamily: "'IBM Plex Mono',monospace" }}
+                        placeholder="••••"
+                        autoComplete="new-password"
+                    />
+                </div>
+                <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11.5, color: "#6E6E6E", marginBottom: 4 }}>ยืนยัน PIN</div>
+                    <input
+                        type="password" inputMode="numeric" maxLength={8}
+                        value={confirmPn} onChange={(e) => { setConfirmPn(e.target.value.replace(/\D/g, "")); setError(""); }}
+                        style={{ width: "100%", boxSizing: "border-box", border: "1px solid #C8C8C8", borderRadius: 4, padding: "9px 12px", fontSize: 18, letterSpacing: 6, fontFamily: "'IBM Plex Mono',monospace" }}
+                        placeholder="••••"
+                        autoComplete="new-password"
+                    />
+                </div>
+            </div>
+            {error && <div style={{ fontSize: 12, color: "#C4372E", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 4, padding: "6px 10px" }}>{error}</div>}
+            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                <button style={{ flex: 1, background: "#FFFFFF", border: "1px solid #C8C8C8", color: "#595959", borderRadius: 4, padding: "9px 0", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+                    onClick={() => setMode("view")}>ยกเลิก</button>
+                <button style={{ flex: 1.5, background: "#1B6E8C", color: "#fff", border: "none", borderRadius: 4, padding: "9px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: mode === "saving" ? 0.6 : 1 }}
+                    onClick={handleSave} disabled={mode === "saving"}>
+                    {mode === "saving" ? "กำลังบันทึก..." : "บันทึก PIN"}
+                </button>
+            </div>
+        </div>
+    );
+}
+
 export default function ProductionScheduler() {
    const [jobs, setJobs] = useState(cloneJobs);
 const [resources, setResources] = useState(cloneResources);
@@ -268,6 +349,7 @@ const [toolHistory, setToolHistory] = useState([]);
 // feed, unlike toolHistory's authoritative hour totals.
 const [auditLog, setAuditLog] = useState([]);
 const [shiftConfig, setShiftConfig] = useState(cloneShifts);
+const [appConfig, setAppConfig] = useState({ overridePin: "" });
 // sequential links between two jobs on the same resource, created when a dragged job is
 // dropped on top of another (a collision) and the person enters a changeover time instead of
 // leaving them stuck overlapping. { id, fromJobId, toJobId, changeoverMin }. Rendered as a
@@ -304,6 +386,7 @@ useEffect(() => {
                 setAuditLog(data.data.auditLog || []);
                 setShiftConfig(data.data.shiftConfig || cloneShifts());
                 setJobLinks(data.data.jobLinks || []);
+                if (data.data.appConfig) setAppConfig(data.data.appConfig);
             }
             setLoaded(true);
         });
@@ -388,7 +471,7 @@ useEffect(() => {
         skipNextRealtimeRef.current = true;
         supabase
             .from("schedule_state")
-            .update({ data: { jobs, resources, toolHistory, auditLog, shiftConfig, jobLinks }, updated_at: new Date().toISOString() })
+            .update({ data: { jobs, resources, toolHistory, auditLog, shiftConfig, jobLinks, appConfig }, updated_at: new Date().toISOString() })
             .eq("id", 1)
             .then();
     }, 800);
@@ -1067,7 +1150,12 @@ useEffect(() => {
     const runningNow = useMemo(() => {
         return jobs
             .filter((j) => j.isRunning)
-            .map((j) => ({ job: j, resource: resources.find((r) => r.id === j.resourceId) || null }));
+            .map((j) => {
+                // actualResourceId set when operator overrode the planned machine at scan time
+                const actualRes = j.actualResourceId ? resources.find((r) => r.id === j.actualResourceId) || null : null;
+                const plannedRes = resources.find((r) => r.id === j.resourceId) || null;
+                return { job: j, resource: actualRes || plannedRes, isOverride: !!actualRes, plannedResource: actualRes ? plannedRes : null };
+            });
     }, [jobs, resources]);
 
     // resources with an active alarm (from QR alarm scans or manual trigger)
@@ -2307,7 +2395,7 @@ useEffect(() => {
                     <div style={styles.toolbar}>
                         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
                             <span style={styles.appTitle}>
-                                {activeNav === "home" ? "Home" : activeNav === "analytics" ? "Analytics" : activeNav === "tools" ? "Tools" : activeNav === "qrcodes" ? "QR Codes" : activeNav === "shifts" ? "Shifts" : activeNav === "history" ? "History" : "Production Scheduler"}
+                                {activeNav === "home" ? "Home" : activeNav === "analytics" ? "Analytics" : activeNav === "tools" ? "Tools" : activeNav === "qrcodes" ? "QR Codes" : activeNav === "shifts" ? "Shifts" : activeNav === "history" ? "History" : activeNav === "settings" ? "Settings" : "Production Scheduler"}
                             </span>
                             <span style={styles.appSub}>from {baseDate.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} · {DAYS} day{DAYS !== 1 ? "s" : ""} shown</span>
                         </div>
@@ -2439,18 +2527,22 @@ useEffect(() => {
                                         กำลังทำงานอยู่ ({runningNow.length})
                                     </div>
                                     <div style={styles.statusBarStrip} className="ps-scroll">
-                                        {runningNow.map(({ job, resource }) => (
+                                        {runningNow.map(({ job, resource, isOverride, plannedResource }) => (
                                             <div
                                                 key={job.id}
                                                 className="ps-statuschip"
-                                                style={styles.statusChip}
+                                                style={{ ...styles.statusChip, ...(isOverride ? { border: "1px solid rgba(251,191,36,0.5)" } : {}) }}
                                                 onClick={() => {
                                                     setActiveNav("schedule");
                                                     jumpToJob(job);
                                                 }}
+                                                title={isOverride ? `Override: รันที่ ${resource?.name} แทน ${plannedResource?.name} (ตาม planning)` : undefined}
                                             >
                                                 <span className="ps-statusbar-dot" style={styles.statusChipDot} />
                                                 <span style={styles.statusChipResource}>{resource ? resource.name : "unscheduled"}</span>
+                                                {isOverride && (
+                                                    <span style={{ fontSize: 9, fontWeight: 700, color: "#92400E", background: "rgba(251,191,36,0.35)", borderRadius: 3, padding: "1px 4px", marginLeft: 2, letterSpacing: 0.2 }}>OVR</span>
+                                                )}
                                                 <span style={styles.statusChipSep}>·</span>
                                                 <span style={styles.statusChipJob}>{job.name}</span>
                                             </div>
@@ -4556,6 +4648,35 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                             <button style={styles.bulkBarClearBtn} onClick={clearBulkSelection}>
                                 <X size={14} />
                             </button>
+                        </div>
+                    )}
+
+
+                    {activeNav === "settings" && (
+                        <div className="ps-scroll" style={styles.analyticsWrap}>
+                            <div style={{ maxWidth: 600, margin: "0 auto" }}>
+
+                                {/* ── Override PIN ── */}
+                                <div style={{ background: "#FFFFFF", border: "1px solid #E8E8E8", borderRadius: 4, padding: "24px 28px", marginBottom: 20 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                                        <Lock size={16} color="#1B6E8C" />
+                                        <span style={{ fontWeight: 700, fontSize: 15, color: "#262626" }}>Override PIN</span>
+                                    </div>
+                                    <div style={{ fontSize: 12.5, color: "#6E6E6E", marginBottom: 20, lineHeight: 1.6 }}>
+                                        PIN 4–8 หลักสำหรับยืนยันการ Override งานไปรันบนเครื่องที่ต่างจาก planning
+                                        <br />ถ้าไม่ตั้ง PIN การ Override จะไม่ต้องใส่รหัส
+                                    </div>
+
+                                    <OverridePinSettings
+                                        currentPin={appConfig.overridePin || ""}
+                                        onSave={(newPin) => {
+                                            const next = { ...appConfig, overridePin: newPin };
+                                            setAppConfig(next);
+                                        }}
+                                    />
+                                </div>
+
+                            </div>
                         </div>
                     )}
 
