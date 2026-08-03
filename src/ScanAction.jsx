@@ -219,6 +219,10 @@ export default function ScanAction({ kind, action, id, onDone }) {
             .from("schedule_state")
             .update({ data: { ...data.data, jobs }, updated_at: nowIso }).eq("id", 1);
         if (ue) { setPhase("error"); setErrorMsg("บันทึกสถานะไม่สำเร็จ"); return; }
+
+        // verify write: log what was saved so we can confirm actualResourceId is set
+        const saved = jobs.find((j) => j.id === targetJob.id);
+        console.log("[ScanAction] job saved:", saved?.id, "actualResourceId:", saved?.actualResourceId, "isOverride:", isOverride);
         setPhase("done");
     }
 
@@ -285,7 +289,10 @@ export default function ScanAction({ kind, action, id, onDone }) {
     const isStop  = kind === "job" && action === "stop";
     const isRaise = kind === "alarm" && action === "raise";
     const isClear = kind === "alarm" && action === "clear";
-    const resDisplay = plannedRes?.name || (kind !== "job" ? resource?.name : "") || "unassigned";
+    // In bind flow: show the actual scanned machine (resource), not the planned one (plannedRes)
+    const resDisplay = kind === "bind"
+        ? (resource?.name || "unassigned")
+        : (plannedRes?.name || (kind !== "job" ? resource?.name : "") || "unassigned");
 
     const doneIsGreen = isStart || isClear || phase === "bind_job_confirm" || phase === "bind_mismatch";
 
@@ -407,7 +414,12 @@ export default function ScanAction({ kind, action, id, onDone }) {
                             <Play size={28} color={RUNNING_GREEN_DARK} strokeWidth={2.5} />
                         </div>
                         <div style={styles.mono}>{job.name}</div>
-                        <div style={styles.sub}>{resDisplay} · {job.product}</div>
+                        <div style={styles.sub}>{resource?.name || plannedRes?.name} · {job.product}</div>
+                        {isOverride && (
+                            <div style={{ fontSize: 11, color: WARN_AMBER, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 5, padding: "4px 10px", marginTop: 2 }}>
+                                ⚠ Override — รันที่ {resource?.name} แทน {plannedRes?.name}
+                            </div>
+                        )}
                         <div style={{ ...styles.title, marginTop: 8 }}>ยืนยันเริ่มงาน?</div>
                         <div style={styles.btnRow}>
                             <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>ยกเลิก</button>
