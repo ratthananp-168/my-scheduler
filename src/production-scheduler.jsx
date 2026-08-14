@@ -266,6 +266,7 @@ const STATUS_META = {
     idle: { label: "Idle", color: "#6E6E6E", Icon: PauseCircle },
     maintenance: { label: "Maintenance", color: "#E8A33D", Icon: Cog },
     down: { label: "Down", color: "#F0625B", Icon: CircleOff },
+    alarm: { label: "Alarm", color: "#C4372E", Icon: CircleOff },
 };
 
 function cloneJobs() {
@@ -3336,7 +3337,7 @@ useEffect(() => {
                                     </div>
                                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                                         {resources.map((r) => {
-                                            const meta = STATUS_META[r.status];
+                                            const meta = STATUS_META[r.status] || STATUS_META["idle"];
                                             return (
                                                 <div
                                                     key={r.id}
@@ -3695,7 +3696,7 @@ useEffect(() => {
                                     </div>
 
                                     {fidsResources.map((r, rowIndex) => {
-                                        const meta = STATUS_META[r.status];
+                                        const meta = STATUS_META[r.status] || STATUS_META["idle"];
                                         return (
                                             <div key={`${fidsPage}-${r.id}`} className={focusMode ? "ps-fids-rows" : undefined} style={{ display: "flex", height: ROW_HEIGHT, animationDelay: focusMode ? `${rowIndex * 30}ms` : undefined }}>
                                                 <div
@@ -4964,7 +4965,7 @@ useEffect(() => {
                                         const clearUrl = `${origin}/?alarm=clear&resource=${r.id}`;
                                         const alarmImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(alarmUrl)}`;
                                         const clearImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(clearUrl)}`;
-                                        const meta = STATUS_META[r.status];
+                                        const meta = STATUS_META[r.status] || STATUS_META["idle"];
                                         return (
                                             <div key={r.id} style={styles.qrCard}>
                                                 <div style={styles.qrCardHeader}>
