@@ -10,26 +10,17 @@ function App() {
   );
 
   const params      = new URLSearchParams(window.location.search);
-  const scanAction  = params.get("scan");      // "start" | "stop"
+  const scanAction  = params.get("scan");
   const scanJobId   = params.get("job");
-  const alarmAction = params.get("alarm");     // "raise" | "clear"
+  const alarmAction = params.get("alarm");
   const alarmResId  = params.get("resource");
 
   const isScanRoute = (scanAction && scanJobId) || (alarmAction && alarmResId);
-  const goHome = () => { window.location.href = window.location.origin; };
 
-  // must be logged in before any scan action
+  // must be logged in before any scan/alarm action
   if (!authed) return <Login onSuccess={() => setAuthed(true)} />;
 
-  // job start/stop
-  if (scanAction && scanJobId) {
-    return <ScanAction kind="job" action={scanAction} id={scanJobId} onDone={goHome} />;
-  }
-
-  // alarm raise/clear
-  if (alarmAction && alarmResId) {
-    return <ScanAction kind="alarm" action={alarmAction} id={alarmResId} onDone={goHome} />;
-  }
+  if (isScanRoute) return <ScanAction />;
 
   return <ProductionScheduler />;
 }
