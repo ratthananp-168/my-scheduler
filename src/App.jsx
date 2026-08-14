@@ -5,10 +5,12 @@ import ProductionScheduler from "./production-scheduler";
 import "./App.css";
 
 // read URL params once at module load — never re-read on re-render
-const _params     = new URLSearchParams(window.location.search);
-const _scanAction = _params.get("scan");
-const _scanJobId  = _params.get("job");
-const IS_SCAN_ROUTE = (_scanAction && _scanJobId);
+const _params      = new URLSearchParams(window.location.search);
+const _scanAction  = _params.get("scan");
+const _scanJobId   = _params.get("job");
+const _alarmAction = _params.get("alarm");
+const _alarmResId  = _params.get("resource");
+const IS_SCAN_ROUTE = (_scanAction && _scanJobId) || (_alarmAction && _alarmResId);
 
 function App() {
   const [authed, setAuthed] = useState(
