@@ -1,23 +1,54 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
 import * as XLSX from "xlsx";
-import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, Minimize2, ChevronLeft, ChevronRight, QrCode, Play, Square, Zap, Upload, Wrench, Clock, FileSpreadsheet, Printer, Volume2, VolumeX, Settings, Plus, Coffee, PieChart, Layers, Package, LogOut, History as HistoryIcon, Move, Link2, Cpu } from "lucide-react";
+import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, Minimize2, ChevronLeft, ChevronRight, ChevronDown, QrCode, Play, Square, Zap, Upload, Wrench, Clock, FileSpreadsheet, Printer, Volume2, VolumeX, Settings, Plus, Coffee, PieChart, Layers, Package, LogOut, History as HistoryIcon, Move, Link2, Cpu, Users, Shield, Eye, UserPlus, KeyRound } from "lucide-react";
 import { parseNCProgram, jobNameFromFilename } from "./utils/ncParser";
 
-const NAV_ITEMS = [
-    { id: "home", label: "Home", Icon: HomeIcon },
-    { id: "schedule", label: "Schedule", Icon: CalendarDays },
-    { id: "analytics", label: "Analytics", Icon: BarChart3 },
-    { id: "tools", label: "Tools", Icon: Wrench },
-    { id: "qrcodes", label: "QR Codes", Icon: QrCode },
-    { id: "shifts", label: "Shifts", Icon: Settings },
-    { id: "history", label: "History", Icon: HistoryIcon },
-    { id: "settings", label: "Settings", Icon: Settings },
+// simple non-crypto hash for passwords stored in schedule_state
+// NOT intended for high-security use — this app runs in a trusted factory intranet
+async function hashPassword(plain) {
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(plain));
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function verifyPassword(plain, hash) {
+    return (await hashPassword(plain)) === hash;
+}
+
+const ROLES = [
+    { id: "admin",    label: "Admin",    Icon: Shield, color: "#1B6E8C", desc: "Full access — manage users, settings, schedule" },
+    { id: "operator", label: "Operator", Icon: Cog,    color: "#21A366", desc: "View + scan jobs, drag schedule" },
+    { id: "viewer",   label: "Viewer",   Icon: Eye,    color: "#6E6E6E", desc: "View only — no edits or scans" },
 ];
+function roleMeta(roleId) { return ROLES.find((r) => r.id === roleId) || ROLES[2]; }
+
+const NAV_GROUPS = [
+    {
+        label: "General",
+        items: [
+            { id: "home",      label: "Home",      Icon: HomeIcon },
+            { id: "schedule",  label: "Schedule",  Icon: CalendarDays },
+            { id: "analytics", label: "Analytics", Icon: BarChart3 },
+            { id: "tools",     label: "Tools",     Icon: Wrench },
+            { id: "qrcodes",   label: "QR Codes",  Icon: QrCode },
+            { id: "history",   label: "History",   Icon: HistoryIcon },
+        ],
+    },
+    {
+        label: "Admin",
+        adminOnly: true,
+        items: [
+            { id: "shifts",   label: "Shifts",   Icon: Settings },
+            { id: "users",    label: "Users",    Icon: Users },
+            { id: "settings", label: "Settings", Icon: Settings },
+        ],
+    },
+];
+// flat list kept for any code that still references NAV_ITEMS
+const NAV_ITEMS = NAV_GROUPS.flatMap((g) => g.items);
 
 const DAY_ABBR_LOCALE = { weekday: "short" };
 
-const ROW_HEIGHT = 80;
+const ROW_HEIGHT = 78;
 const HEADER_HEIGHT = 68;
 const SHIFT_BAND_HEIGHT = 16;
 const RESOURCE_COL_WIDTH = 168;
@@ -86,6 +117,14 @@ function playAlarmTone(ctx, now) {
 const SNAP_HOURS = 1 / 60;
 function snapHours(hours) {
     return Math.round(hours / SNAP_HOURS) * SNAP_HOURS;
+}
+// total block width on Gantt = setup + production duration + tool change time
+// job.duration = production only; setupMin and tool changes (tcDurationMin × changes) add on top
+function jobTotalHours(job) {
+    const toolCount = (job.tools || []).length;
+    const changes = Math.max(0, toolCount - 1);
+    const tcTotal = changes * (Number(job.tcDurationMin) || 0);
+    return (job.duration || 0) + (job.setupMin || 0) / 60 + tcTotal / 60;
 }
 // how close a "to" job's start has to be to its linked "from" job's end+changeover to still
 // count as adjacent - used both to prune stale links after a drag and, as a defense-in-depth
@@ -341,6 +380,8 @@ const [resources, setResources] = useState(cloneResources);
 // deleted), this survives job deletion so the Tools page keeps an accurate lifetime total.
 // Written to by ScanAction.jsx on every STOP scan.
 const [toolHistory, setToolHistory] = useState([]);
+// tool metadata: { [key]: { offsetX, offsetZ, diameter, length, location, inventory } }
+const [toolMetadata, setToolMetadata] = useState({});
 // lightweight activity/audit trail - who/what/when for deletions, drags, alarms, scans,
 // resource edits, and NC imports. Capped to the most recent AUDIT_LOG_MAX entries so the
 // JSON blob doesn't grow unbounded. Shared the same way toolHistory is: embedded in the
@@ -350,6 +391,9 @@ const [toolHistory, setToolHistory] = useState([]);
 const [auditLog, setAuditLog] = useState([]);
 const [shiftConfig, setShiftConfig] = useState(cloneShifts);
 const [appConfig, setAppConfig] = useState({ overridePin: "" });
+// user accounts: [{ id, username, passwordHash, role, createdAt }]
+// admin is seeded on first load if list is empty
+const [users, setUsers] = useState([]);
 // sequential links between two jobs on the same resource, created when a dragged job is
 // dropped on top of another (a collision) and the person enters a changeover time instead of
 // leaving them stuck overlapping. { id, fromJobId, toJobId, changeoverMin }. Rendered as a
@@ -364,6 +408,8 @@ const skipNextRealtimeRef = useRef(false);
 // triggers the other tab's echo in turn, forever, every ~1-2s. That loop can silently overwrite
 // a just-scanned change with a stale snapshot before you ever see it.
 const remoteUpdateRef = useRef(false);
+// set true in confirmLinkPrompt so the jobs useEffect skips pruning that render
+const skipLinkPruneRef = useRef(false);
 // mirrors of latest jobs/resources + which job/resource is currently open in the edit panel.
 // Used so an incoming realtime update never clobbers the row you're actively typing into
 // (previously: typing a name while a realtime event landed reset the field almost instantly).
@@ -387,6 +433,8 @@ useEffect(() => {
                 setShiftConfig(data.data.shiftConfig || cloneShifts());
                 setJobLinks(data.data.jobLinks || []);
                 if (data.data.appConfig) setAppConfig(data.data.appConfig);
+                if (data.data.users) setUsers(data.data.users);
+                if (data.data.toolMetadata) setToolMetadata(data.data.toolMetadata);
             }
             setLoaded(true);
         });
@@ -435,6 +483,9 @@ useEffect(() => {
                 if (incoming.toolHistory) {
                     setToolHistory(incoming.toolHistory);
                 }
+                if (incoming.toolMetadata) {
+                    setToolMetadata(incoming.toolMetadata);
+                }
                 if (incoming.auditLog) {
                     setAuditLog(incoming.auditLog);
                 }
@@ -443,6 +494,9 @@ useEffect(() => {
                 }
                 if (incoming.jobLinks) {
                     setJobLinks(incoming.jobLinks);
+                }
+                if (incoming.users) {
+                    setUsers(incoming.users);
                 }
 
                 // if we kept an in-progress edit, this update is NOT a pure remote sync -
@@ -471,30 +525,15 @@ useEffect(() => {
         skipNextRealtimeRef.current = true;
         supabase
             .from("schedule_state")
-            .update({ data: { jobs, resources, toolHistory, auditLog, shiftConfig, jobLinks, appConfig }, updated_at: new Date().toISOString() })
+            .update({ data: { jobs, resources, toolHistory, toolMetadata, auditLog, shiftConfig, jobLinks, appConfig, users }, updated_at: new Date().toISOString() })
             .eq("id", 1)
             .then();
     }, 800);
     return () => clearTimeout(timer);
-}, [jobs, resources, toolHistory, auditLog, shiftConfig, jobLinks, loaded]);
+}, [jobs, resources, toolHistory, toolMetadata, auditLog, shiftConfig, jobLinks, users, loaded]);
 
-// belt-and-suspenders consistency pass: re-validate every job link any time `jobs` changes,
-// no matter *why* it changed - a plain drag, a resize, a bulk shift, a manual edit in the side
-// panel, dropping a job back onto the grid from the unscheduled pool, deleting a job/resource,
-// an NC re-import, or even an incoming realtime update from someone else's tab. Threading a
-// manual pruneStaleLinks() call into every individual place that can move a job kept missing
-// edge cases (pool drops, cross-tab updates, etc.), so this effect is the actual guarantee:
-// a link can never survive more than one render past the moment its two jobs stop being
-// exactly back-to-back, regardless of which code path caused that.
-useEffect(() => {
-    setJobLinks((links) => {
-        const pruned = pruneStaleLinks(jobs, links);
-        // skip the update (and the save/broadcast it would trigger) when nothing changed
-        if (pruned.length === links.length && pruned.every((l, i) => l === links[i])) return links;
-        return pruned;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [jobs]);
+// pruneStaleLinks is called explicitly at every local action that moves/resizes/deletes a job.
+// No blanket useEffect is needed - it caused links to be pruned after Supabase auto-save echoes.
 
     const [hourWidth, setHourWidth] = useState(22);
     const [selectedJobId, setSelectedJobId] = useState(null);
@@ -526,6 +565,13 @@ useEffect(() => {
     const [filterFromDate, setFilterFromDate] = useState("");
     const [filterToDate, setFilterToDate] = useState("");
     const [focusMode, setFocusMode] = useState(false);
+    const [fidsPage, setFidsPage] = useState(0);
+    const [poolHeight, setPoolHeight] = useState(200);
+    const poolResizeRef = useRef(null);
+    const [machineGroups, setMachineGroups] = useState([]); // [{id, name, color, resourceIds:[]}]
+    const [showGroupModal, setShowGroupModal] = useState(false);
+    const [editingGroup, setEditingGroup] = useState(null); // null = new group
+    const [groupForm, setGroupForm] = useState({ name: "", color: "#1B6E8C", resourceIds: [] });
     const [pendingAlarmReason, setPendingAlarmReason] = useState(ALARM_REASONS[0].id);
     const [bulkSelectedIds, setBulkSelectedIds] = useState(() => new Set());
     const [importError, setImportError] = useState("");
@@ -542,9 +588,44 @@ useEffect(() => {
         alarmSoundEnabledRef.current = alarmSoundEnabled;
     }, [alarmSoundEnabled]);
     const [selectedToolKey, setSelectedToolKey] = useState(null);
+    const [toolDraft, setToolDraft] = useState({}); // { maxLife, diameter, length, offsetZ, location, inventory }
+    const [toolViewMode, setToolViewMode] = useState("list"); // "list" | "grid"
+    const [expandedMachines, setExpandedMachines] = useState(new Set()); // accordion open state — all start open
+    const [changeToolPopup, setChangeToolPopup] = useState(null); // null | { number, name, jobName, usedHours }
+    const [changeToolReason, setChangeToolReason] = useState("scheduled");
+    const [changeToolNote, setChangeToolNote] = useState("");
+    const [showAddToolModal, setShowAddToolModal] = useState(false);
+    const [addToolForm, setAddToolForm] = useState({ number: "", name: "", maxLife: String(TOOL_LIFE_HOURS), machineId: "" });
+    const [confirmDeleteToolKey, setConfirmDeleteToolKey] = useState(null);
     const [toolsJobFilter, setToolsJobFilter] = useState("all");
+    const [toolsMachineFilter, setToolsMachineFilter] = useState("all");
+    // keys of near-limit alerts the user has already dismissed this session
+    const [dismissedNearLimitKeys, setDismissedNearLimitKeys] = useState(new Set());
+    // stacked near-limit toast alerts: { id, toolName, lifePct }
+    const [nearLimitAlerts, setNearLimitAlerts] = useState([]);
     // index of the tool-change row currently being drag-and-drop reordered in the job panel
     const [draggedToolChangeIdx, setDraggedToolChangeIdx] = useState(null);
+    // local string buffer for the setup-time input so the user can clear/retype freely
+    // without the field snapping back to 0 on every keystroke
+    const [setupInputVal, setSetupInputVal] = useState("");
+    const currentRole = sessionStorage.getItem("ps-role") || "admin";
+    const isAdmin = currentRole === "admin";
+    const [userFormMode, setUserFormMode] = useState(null);
+    const [userFormUsername, setUserFormUsername] = useState("");
+    const [userFormEmail, setUserFormEmail] = useState("");
+    const [userFormAvatar, setUserFormAvatar] = useState(""); // base64 data URL
+    const [userFormPassword, setUserFormPassword] = useState("");
+    const [userFormRole, setUserFormRole] = useState("operator");
+    const [userFormMachineId, setUserFormMachineId] = useState("");
+    const [userFormError, setUserFormError] = useState("");
+    const [userFormSaving, setUserFormSaving] = useState(false);
+    const [selectedUserId, setSelectedUserId] = useState(null);
+    const [userSearch, setUserSearch] = useState("");
+    const [userFilterRole, setUserFilterRole] = useState("all");
+    const [userSort, setUserSort] = useState({ col: "username", dir: "asc" });
+    const [userPage, setUserPage] = useState(1);
+    const [userRowsPerPage, setUserRowsPerPage] = useState(10);
+    const [userFilterDate, setUserFilterDate] = useState("all"); // "all" | "today" | "week" | "month"
     const [nowTick, setNowTick] = useState(Date.now());
     useEffect(() => {
         const t = setInterval(() => setNowTick(Date.now()), 30000);
@@ -554,6 +635,10 @@ useEffect(() => {
     // stacked notices for the current import batch: { id, type: "created"|"updated"|"unchanged"|"error", text }
     const [ncImportNotices, setNcImportNotices] = useState([]);
     const ncFileInputRef = useRef(null);
+    const [ncFolderUpdating, setNcFolderUpdating] = useState(false);
+    const [poolMachineFilter, setPoolMachineFilter] = useState("all");
+    const [simulatedJobIds, setSimulatedJobIds] = useState(new Set());
+    const groupSnapshotRef = useRef(null); // snapshot of machineGroups before edit starts
 
     // rough signature of an NC job's substance (duration + tool list), used to tell a genuine
     // revision (re-imported file whose content actually changed) apart from a no-op re-import
@@ -675,6 +760,40 @@ useEffect(() => {
         importNCFiles(e.dataTransfer.files);
     }
 
+    // Update from folder - เขียน rescan_requested flag ลง Supabase
+    // watch-nc-files.js จะรับ event และ rescan โฟลเดอร์ NC-Files ทั้งหมดให้อัตโนมัติ
+    async function handleUpdateFromFolder() {
+        try {
+            setNcFolderUpdating(true);
+            setNcImportNotices([]);
+            const { error } = await supabase
+                .from("schedule_state")
+                .update({ rescan_requested: true, updated_at: new Date().toISOString() })
+                .eq("id", 1);
+            if (error) throw new Error(error.message);
+
+            // subscribe รอ watch script clear flag กลับเป็น false แล้วหาย
+            const ch = supabase
+                .channel("rescan-done-" + Date.now())
+                .on(
+                    "postgres_changes",
+                    { event: "UPDATE", schema: "public", table: "schedule_state", filter: "id=eq.1" },
+                    (payload) => {
+                        if (payload.new?.rescan_requested === false) {
+                            setNcFolderUpdating(false);
+                            setNcImportNotices([]);
+                            supabase.removeChannel(ch);
+                        }
+                    }
+                )
+                .subscribe();
+
+        } catch (err) {
+            setNcFolderUpdating(false);
+            setNcImportNotices([{ id: "ncnotice-" + Date.now(), type: "error", text: "Failed to send rescan command: " + err.message }]);
+        }
+    }
+
     const DAYS = viewDays;
     const TOTAL_HOURS = DAYS * 24;
 
@@ -696,6 +815,12 @@ useEffect(() => {
     }, [jobs]);
     useEffect(() => {
         editingJobIdRef.current = selectedJobId;
+    }, [selectedJobId]);
+    useEffect(() => {
+        // reset the setup-time text buffer whenever the user selects a different job
+        const job = jobs.find((j) => j.id === selectedJobId);
+        setSetupInputVal(job ? String(job.setupMin || 0) : "0");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedJobId]);
     useEffect(() => {
         editingResourceIdRef.current = selectedResourceId;
@@ -746,6 +871,36 @@ useEffect(() => {
         return () => cancelAnimationFrame(id);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [viewDays]);
+
+    // FIDS: auto-rotate resources page in focus mode every 10 seconds
+    useEffect(() => {
+        if (!focusMode) { setFidsPage(0); return; }
+        const fidsRowsPerPage = 10;
+        const totalPages = Math.ceil(resources.length / fidsRowsPerPage);
+        if (totalPages <= 1) { setFidsPage(0); return; }
+        const id = setInterval(() => {
+            setFidsPage((p) => (p + 1) % totalPages);
+        }, 10000);
+        return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [focusMode, resources.length]);
+
+    // sync focus mode with browser fullscreen (e.g. user presses Esc)
+    useEffect(() => {
+        const onFsChange = () => {
+            if (!document.fullscreenElement) setFocusMode(false);
+        };
+        document.addEventListener("fullscreenchange", onFsChange);
+        return () => document.removeEventListener("fullscreenchange", onFsChange);
+    }, []);
+
+    const fidsRowsPerPage = 10;
+
+    const fidsResources = useMemo(() => {
+        if (!focusMode || resources.length <= fidsRowsPerPage) return resources;
+        const start = fidsPage * fidsRowsPerPage;
+        return resources.slice(start, start + fidsRowsPerPage);
+    }, [focusMode, fidsPage, fidsRowsPerPage, resources]);
 
     const baseDate = useMemo(() => {
         const d = new Date();
@@ -925,7 +1080,10 @@ useEffect(() => {
                 .slice()
                 .sort((a, b) => a.startHour - b.startHour);
             for (let i = 1; i < rJobs.length; i++) {
-                if (rJobs[i].startHour < rJobs[i - 1].startHour + rJobs[i - 1].duration) {
+                // overlap when the previous job's full block (setup + toolchange + production)
+                // extends past the next job's start time
+                const prevEnd = rJobs[i - 1].startHour + jobTotalHours(rJobs[i - 1]);
+                if (rJobs[i].startHour < prevEnd) {
                     ids.add(rJobs[i].id);
                     ids.add(rJobs[i - 1].id);
                 }
@@ -1136,13 +1294,33 @@ useEffect(() => {
             .sort((a, b) => b.lifePct - a.lifePct);
     }, [toolSummary]);
 
-    // top 10 tools by actual hours used (respects the job filter), for the bar chart
+    // unique machines (resources) that have at least one tool-carrying job on them
+    const toolsMachineOptions = useMemo(() => {
+        const machineIds = new Set();
+        jobs.forEach((j) => {
+            if (j.resourceId && j.tools && j.tools.length > 0) machineIds.add(j.resourceId);
+        });
+        return resources.filter((r) => machineIds.has(r.id)).sort((a, b) => a.name.localeCompare(b.name));
+    }, [jobs, resources]);
+
+    // apply job filter to the visible tool list (machine filter now handled by accordion)
+    const visibleToolSummaryFiltered = useMemo(() => {
+        let base = visibleToolSummary;
+        if (toolsMachineFilter !== "all") {
+            const machineJobIds = new Set(jobs.filter((j) => j.resourceId === toolsMachineFilter).map((j) => j.id));
+            base = base.filter((t) => t.jobs.some((j) => machineJobIds.has(j.id)));
+        }
+        return base;
+    }, [visibleToolSummary, toolsMachineFilter, jobs]);
+
+    // group tools by machine for accordion view — each machine gets its own section
+    // top 10 tools by actual hours used (respects the job + machine filter), for the bar chart
     const topToolsByUsage = useMemo(() => {
-        return visibleToolSummary
+        return visibleToolSummaryFiltered
             .map((t) => ({ ...t, usedHours: t.actualHours + t.liveHours }))
             .sort((a, b) => b.usedHours - a.usedHours)
             .slice(0, 10);
-    }, [visibleToolSummary]);
+    }, [visibleToolSummaryFiltered]);
 
     // jobs currently marked as running (from QR start/stop scans), paired with their resource.
     // NC-imported jobs often start out unscheduled (no resourceId) - they can still be
@@ -1299,7 +1477,7 @@ useEffect(() => {
     // instead of silently leaving them stuck overlapping
     function findOverlapOnResource(jobsList, resourceId, startHour, duration, excludeJobId) {
         return jobsList.find(
-            (j) => j.resourceId === resourceId && j.id !== excludeJobId && startHour < j.startHour + j.duration && startHour + duration > j.startHour
+            (j) => j.resourceId === resourceId && j.id !== excludeJobId && startHour < j.startHour + jobTotalHours(j) && startHour + duration > j.startHour
         );
     }
 
@@ -1314,7 +1492,7 @@ useEffect(() => {
     function isLinkStillAdjacent(fromJ, toJ, link) {
         if (!fromJ || !toJ) return false;
         if (!fromJ.resourceId || !toJ.resourceId || fromJ.resourceId !== toJ.resourceId) return false;
-        const expectedStart = fromJ.startHour + fromJ.duration + (Number(link.changeoverMin) || 0) / 60;
+        const expectedStart = fromJ.startHour + jobTotalHours(fromJ) + (Number(link.changeoverMin) || 0) / 60;
         return Math.abs(toJ.startHour - expectedStart) < LINK_TOLERANCE_HOURS;
     }
 
@@ -1343,7 +1521,7 @@ useEffect(() => {
             draggedIsAfter,
             draggedDuration,
             otherStart: otherJob.startHour,
-            otherDuration: otherJob.duration,
+            otherDuration: jobTotalHours(otherJob),
             changeoverMin: 15,
             revert,
         });
@@ -1375,9 +1553,9 @@ useEffect(() => {
             resourceId: earlier.resourceId,
             draggedJobId: later.id,
             draggedIsAfter: true,
-            draggedDuration: later.duration,
+            draggedDuration: jobTotalHours(later),
             otherStart: earlier.startHour,
-            otherDuration: earlier.duration,
+            otherDuration: jobTotalHours(earlier),
             changeoverMin: 15,
             revert: null,
         });
@@ -1386,22 +1564,26 @@ useEffect(() => {
 
     function confirmLinkPrompt() {
         if (!linkPrompt) return;
-        // the changeover time is honored exactly - the just-linked job is placed at the precise
-        // computed offset, not snapped to the usual 15-minute grid, so the gap always matches
-        // what was typed to the minute. (Every other job everywhere else in the app still snaps
-        // normally when dragged/resized - this only applies to the position this link sets.)
         const changeoverMinEntered = Math.max(0, Number(linkPrompt.changeoverMin) || 0);
         const changeoverHours = changeoverMinEntered / 60;
+        // read live jobs so jobTotalHours includes setup+toolchange correctly
+        const liveFromJob = jobsRef.current.find((j) => j.id === linkPrompt.fromJobId);
+        const liveDraggedJob = jobsRef.current.find((j) => j.id === linkPrompt.draggedJobId);
+        const fromTotalH = liveFromJob ? jobTotalHours(liveFromJob) : linkPrompt.otherDuration;
+        const draggedTotalH = liveDraggedJob ? jobTotalHours(liveDraggedJob) : linkPrompt.draggedDuration;
         const rawStart = linkPrompt.draggedIsAfter
-            ? linkPrompt.otherStart + linkPrompt.otherDuration + changeoverHours
-            : linkPrompt.otherStart - changeoverHours - linkPrompt.draggedDuration;
+            ? linkPrompt.otherStart + fromTotalH + changeoverHours
+            : linkPrompt.otherStart - changeoverHours - draggedTotalH;
         const newStart = Math.max(0, rawStart);
+        const capFrom = linkPrompt.fromJobId;
+        const capTo = linkPrompt.toJobId;
+        skipLinkPruneRef.current = true;
         setJobs((js) => js.map((j) => (j.id === linkPrompt.draggedJobId ? { ...j, startHour: newStart, resourceId: linkPrompt.resourceId } : j)));
         setJobLinks((links) => [
-            ...links.filter((l) => !(l.fromJobId === linkPrompt.fromJobId && l.toJobId === linkPrompt.toJobId)),
-            { id: newId("link"), fromJobId: linkPrompt.fromJobId, toJobId: linkPrompt.toJobId, changeoverMin: changeoverMinEntered },
+            ...links.filter((l) => !(l.fromJobId === capFrom && l.toJobId === capTo)),
+            { id: newId("link"), fromJobId: capFrom, toJobId: capTo, changeoverMin: changeoverMinEntered },
         ]);
-        logActivity("job_linked", `${linkPrompt.fromJobName} → ${linkPrompt.toJobName} linked (${changeoverMinEntered}m changeover)`, {
+        logActivity("job_linked", linkPrompt.fromJobName + " -> " + linkPrompt.toJobName + " linked (" + changeoverMinEntered + "m changeover)", {
             fromJobId: linkPrompt.fromJobId,
             toJobId: linkPrompt.toJobId,
             changeoverMin: changeoverMinEntered,
@@ -1437,7 +1619,7 @@ useEffect(() => {
                     const origin = d.origins[j.id];
                     if (!origin) return j;
                     const newRowIndex = Math.max(0, Math.min(resList.length - 1, origin.rowIndex + deltaRows));
-                    const newStart = Math.max(0, Math.min(TOTAL_HOURS - j.duration, origin.startHour + deltaHours));
+                    const newStart = Math.max(0, Math.min(TOTAL_HOURS - jobTotalHours(j), origin.startHour + deltaHours));
                     return { ...j, startHour: newStart, resourceId: resList[newRowIndex].id };
                 })
             );
@@ -1450,7 +1632,7 @@ useEffect(() => {
         } else {
             const deltaHours = snapHours(dx / hw);
             const deltaRows = Math.round(dy / ROW_HEIGHT);
-            const newStart = Math.max(0, Math.min(TOTAL_HOURS - d.origDuration, d.origStart + deltaHours));
+            const newStart = Math.max(0, Math.min(TOTAL_HOURS - (d.origTotalHours || d.origDuration), d.origStart + deltaHours));
             const newRowIndex = Math.max(0, Math.min(resourcesRef.current.length - 1, d.origRowIndex + deltaRows));
             const newResourceId = resourcesRef.current[newRowIndex].id;
             setJobs((js) => js.map((j) => (j.id === d.jobId ? { ...j, startHour: newStart, resourceId: newResourceId } : j)));
@@ -1480,18 +1662,17 @@ useEffect(() => {
                     const job = js.find((j) => j.id === d.jobId);
                     if (!job) return js;
                     appliedDuration = job.duration;
-                    appliedStartHour = Math.max(0, Math.min(TOTAL_HOURS - job.duration, snapHours(localX / hw)));
+                    appliedStartHour = Math.max(0, Math.min(TOTAL_HOURS - jobTotalHours(job), snapHours(localX / hw)));
                     return js.map((j) => (j.id === d.jobId ? { ...j, resourceId: targetRes.id, startHour: appliedStartHour } : j));
                 });
                 if (appliedStartHour != null) {
-                    const overlap = findOverlapOnResource(jobsRef.current, targetRes.id, appliedStartHour, appliedDuration, d.jobId);
+                    const _draggedJob = jobsRef.current.find((j) => j.id === d.jobId);
+                    const _draggedTotalH = _draggedJob ? jobTotalHours(_draggedJob) : appliedDuration;
+                    const overlap = findOverlapOnResource(jobsRef.current, targetRes.id, appliedStartHour, _draggedTotalH, d.jobId);
                     if (overlap) {
-                        openChangeoverPrompt(d.jobId, d.jobName, appliedStartHour, appliedDuration, targetRes.id, overlap, {
-                            jobId: d.jobId,
-                            startHour: d.origStart,
-                            duration: d.origDuration,
-                            resourceId: d.origResourceId,
-                        });
+                        // snap dragged job to end of the job it landed on
+                        const snapStart = overlap.startHour + jobTotalHours(overlap);
+                        setJobs((js) => js.map((j) => (j.id === d.jobId ? { ...j, startHour: snapStart, resourceId: targetRes.id } : j)));
                     } else {
                         logActivity("job_scheduled", `${d.jobName} scheduled to ${targetRes ? targetRes.name : "resource"}`, {
                             jobId: d.jobId,
@@ -1552,18 +1733,11 @@ useEffect(() => {
                     // conflict (red outline), since "grow into the next job" isn't a sequencing
                     // action the way dragging one job onto another is
                     if (!isResize) {
-                        const overlap = findOverlapOnResource(jobsRef.current, finalJob.resourceId, finalJob.startHour, finalJob.duration, d.jobId);
+                        const overlap = findOverlapOnResource(jobsRef.current, finalJob.resourceId, finalJob.startHour, jobTotalHours(finalJob), d.jobId);
                         if (overlap) {
-                            openChangeoverPrompt(d.jobId, finalJob.name, finalJob.startHour, finalJob.duration, finalJob.resourceId, overlap, {
-                                jobId: d.jobId,
-                                startHour: d.origStart,
-                                duration: d.origDuration,
-                                resourceId: d.origResourceId,
-                            });
-                            dragRef.current = null;
-                            window.removeEventListener("pointermove", handlePointerMove);
-                            window.removeEventListener("pointerup", handlePointerUp);
-                            return;
+                            // snap dragged job to end of the job it landed on
+                            const snapStart = overlap.startHour + jobTotalHours(overlap);
+                            setJobs((js) => js.map((j) => (j.id === d.jobId ? { ...j, startHour: snapStart } : j)));
                         }
                     }
                     const fromRes = resourcesRef.current.find((r) => r.id === d.origResourceId);
@@ -1644,6 +1818,8 @@ useEffect(() => {
             startY: e.clientY,
             origStart: job.startHour,
             origDuration: job.duration,
+            origSetupMin: job.setupMin || 0,
+            origTotalHours: jobTotalHours(job),
             origRowIndex: rowIndex,
             origResourceId: job.resourceId,
         };
@@ -1753,6 +1929,76 @@ useEffect(() => {
         });
         // the shifted positions don't respect any changeover gap, so re-validate links
         if (nextJobsSnapshot) setJobLinks((links) => pruneStaleLinks(nextJobsSnapshot, links));
+    }
+
+    // Simulation: fill empty slots across all resources for the next 2 days from baseDate.
+    // Only inserts into gaps - never overlaps existing jobs. Marks generated jobs with
+    // isSimulated:true so they can be bulk-cleared without touching real data.
+    const SIM_PRODUCTS = ["Bracket", "Housing", "Panel", "Fixture"];
+    const SIM_DURATIONS = [2, 3, 4, 5, 6]; // hours - reasonable job sizes
+    const SIM_NAMES = ["SIM-A", "SIM-B", "SIM-C", "SIM-D", "SIM-E", "SIM-F", "SIM-G", "SIM-H", "SIM-J", "SIM-K"];
+    let _simNameIdx = 0;
+
+    function runSimulation() {
+        const SIM_HOURS = 72;
+        const currentJobs = jobsRef.current;
+
+        const occupied = {};
+        resources.forEach((r) => { occupied[r.id] = []; });
+        currentJobs.forEach((j) => {
+            if (!j.resourceId || j.isSimulated) return;
+            const end = j.startHour + jobTotalHours(j);
+            occupied[j.resourceId].push({ start: j.startHour, end });
+        });
+        Object.keys(occupied).forEach((rid) => {
+            occupied[rid].sort((a, b) => a.start - b.start);
+        });
+
+        const simJobs = [];
+        const newSimIds = new Set();
+
+        resources.forEach((r) => {
+            const intervals = occupied[r.id] || [];
+            let cursor = 0;
+            const gaps = [];
+            intervals.forEach(({ start, end }) => {
+                if (cursor < start - 0.5) gaps.push({ from: cursor, to: start });
+                cursor = Math.max(cursor, end);
+            });
+            if (cursor < SIM_HOURS) gaps.push({ from: cursor, to: SIM_HOURS });
+
+            gaps.forEach(({ from, to }) => {
+                // random initial offset: 0 (tight) or 0.5-3h gap before first job
+                let pos = from + (Math.random() < 0.4 ? 0 : Math.random() * 3);
+                let safety = 0;
+                while (pos < to - 1 && safety++ < 20) {
+                    const avail = to - pos;
+                    if (avail < 1) break;
+                    const maxDur = Math.min(avail, 6);
+                    const dur = Math.max(1, snapHours(1 + Math.random() * (maxDur - 1)));
+                    const prod = SIM_PRODUCTS[Math.floor(Math.random() * SIM_PRODUCTS.length)];
+                    const name = SIM_NAMES[(_simNameIdx++) % SIM_NAMES.length] + "-" + String(simJobs.length + 1).padStart(2, "0");
+                    simJobs.push({
+                        id: newId("sim"), name, product: prod,
+                        resourceId: r.id, startHour: snapHours(pos), duration: dur,
+                        locked: false, isSimulated: true, setupMin: 0, tcDurationMin: 0, tools: [],
+                    });
+                    newSimIds.add(simJobs[simJobs.length - 1].id);
+                    // gap after job: 30% chance back-to-back (0), else random 0.5-4h
+                    const gap = Math.random() < 0.3 ? 0 : snapHours(0.5 + Math.random() * 3.5);
+                    pos = snapHours(pos + dur + gap);
+                }
+            });
+        });
+
+        if (simJobs.length === 0) return;
+        setJobs((prev) => [...prev.filter((j) => !j.isSimulated), ...simJobs]);
+        setSimulatedJobIds(newSimIds);
+    }
+
+    function clearSimulation() {
+        setJobs((prev) => prev.filter((j) => !j.isSimulated));
+        setSimulatedJobIds(new Set());
     }
 
     function sanitizeFilename(name) {
@@ -2057,6 +2303,65 @@ useEffect(() => {
         logActivity("resource_created", `${newResource.name} created`, { resourceId: id });
     }
 
+    function getResourceGroup(resourceId) {
+        return machineGroups.find((g) => g.resourceIds.includes(resourceId)) || null;
+    }
+
+    function openNewGroup() {
+        groupSnapshotRef.current = null;
+        setEditingGroup(null);
+        setGroupForm({ name: "", color: "#1B6E8C", resourceIds: [] });
+        setShowGroupModal(true);
+    }
+
+    function openEditGroup(g) {
+        groupSnapshotRef.current = machineGroups.map((gr) => ({ ...gr, resourceIds: [...gr.resourceIds] }));
+        setEditingGroup(g.id);
+        setGroupForm({ name: g.name, color: g.color, resourceIds: [...g.resourceIds] });
+        setShowGroupModal(true);
+    }
+
+    function createGroup() {
+        if (!groupForm.name.trim()) return;
+        const newId = "grp-" + Date.now();
+        const newGroup = { id: newId, ...groupForm };
+        setMachineGroups((gs) => {
+            groupSnapshotRef.current = [...gs.map((gr) => ({ ...gr, resourceIds: [...gr.resourceIds] })), { ...newGroup }];
+            return [...gs, newGroup];
+        });
+        setEditingGroup(newId);
+        setGroupForm({ name: newGroup.name, color: newGroup.color, resourceIds: [...newGroup.resourceIds] });
+    }
+
+    function updateGroup() {
+        if (!editingGroup || !groupForm.name.trim()) return;
+        setMachineGroups((gs) => gs.map((g) => g.id === editingGroup ? { ...g, name: groupForm.name, color: groupForm.color } : g));
+        groupSnapshotRef.current = null;
+        setEditingGroup(null);
+        setGroupForm({ name: "", color: "#1B6E8C", resourceIds: [] });
+    }
+
+    function cancelGroup() {
+        if (groupSnapshotRef.current) {
+            setMachineGroups(groupSnapshotRef.current);
+            groupSnapshotRef.current = null;
+        }
+        setEditingGroup(null);
+        setGroupForm({ name: "", color: "#1B6E8C", resourceIds: [] });
+    }
+
+    function saveGroup() {
+        if (!groupForm.name.trim() && !editingGroup) return;
+        if (editingGroup) {
+            setMachineGroups((gs) => gs.map((g) => g.id === editingGroup ? { ...g, ...groupForm } : g));
+        }
+        setShowGroupModal(false);
+    }
+
+    function deleteGroup(id) {
+        setMachineGroups((gs) => gs.filter((g) => g.id !== id));
+    }
+
     function updateResource(id, patch) {
         setResources((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
     }
@@ -2112,6 +2417,80 @@ useEffect(() => {
 
     // clears the "ps-authed" flag that Login.jsx sets and App.jsx checks on mount, then
     // reloads so App.jsx re-evaluates and shows the login screen again
+    // ── User management ──────────────────────────────────────────────────────
+    async function addUser(username, password, role, email, avatar, machineId) {
+        if (!username.trim()) { setUserFormError("Username is required"); return false; }
+        if (password.length < 4) { setUserFormError("Password must be at least 4 characters"); return false; }
+        if (users.find((u) => u.username.toLowerCase() === username.trim().toLowerCase())) {
+            setUserFormError("Username already exists"); return false;
+        }
+        setUserFormSaving(true);
+        const passwordHash = await hashPassword(password);
+        const newUser = { id: newId("usr"), username: username.trim(), email: (email || "").trim(), avatar: avatar || "", passwordHash, role, machineId: machineId || "", createdAt: new Date().toISOString() };
+        setUsers((prev) => [...prev, newUser]);
+        setUserFormSaving(false);
+        return true;
+    }
+
+    async function updateUserPassword(userId, newPassword) {
+        if (newPassword.length < 4) { setUserFormError("Password must be at least 4 characters"); return false; }
+        setUserFormSaving(true);
+        const passwordHash = await hashPassword(newPassword);
+        setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, passwordHash } : u)));
+        setUserFormSaving(false);
+        return true;
+    }
+
+    function updateUserRole(userId, role) {
+        setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, role } : u)));
+    }
+
+    function updateUserEmail(userId, email) {
+        setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, email: (email || "").trim() } : u)));
+    }
+
+    function updateUserAvatar(userId, avatar) {
+        setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, avatar: avatar || "" } : u)));
+    }
+
+    function updateUserMachine(userId, machineId) {
+        setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, machineId: machineId || "" } : u)));
+    }
+
+    function deleteUser(userId) {
+        const me = sessionStorage.getItem("ps-username");
+        const target = users.find((u) => u.id === userId);
+        if (target && target.username === me) { setUserFormError("Cannot delete your own account"); return; }
+        setUsers((prev) => prev.filter((u) => u.id !== userId));
+    }
+
+    function openAddUser() {
+        setUserFormMode("add");
+        setUserFormUsername("");
+        setUserFormEmail("");
+        setUserFormAvatar("");
+        setUserFormPassword("");
+        setUserFormRole("operator");
+        setUserFormMachineId("");
+        setUserFormError("");
+    }
+
+    function openEditUser(user) {
+        setUserFormMode({ id: user.id });
+        setUserFormUsername(user.username);
+        setUserFormEmail(user.email || "");
+        setUserFormAvatar(user.avatar || "");
+        setUserFormPassword("");
+        setUserFormRole(user.role);
+        setUserFormMachineId(user.machineId || "");
+        setUserFormError("");
+    }
+
+    function closeUserForm() {
+        setUserFormMode(null);
+        setUserFormError("");
+    }
+
     function handleLogout() {
         sessionStorage.removeItem("ps-authed");
         window.location.reload();
@@ -2140,25 +2519,16 @@ useEffect(() => {
         return Array.from(map.values());
     }
 
-    // furthest point (in hours) any tool-change segment reaches - used to make sure the job's
-    // scheduled duration always covers the full tool-change timeline the user has entered
-    function toolChangesSpanHours(toolChanges) {
-        const maxEndMin = (toolChanges || []).reduce((max, c) => Math.max(max, (Number(c.startMin) || 0) + (Number(c.durationMin) || 0)), 0);
-        return maxEndMin / 60;
+    // total tool-change time in hours based on simple per-change duration
+    function jobTcTotalMin(job) {
+        const changes = Math.max(0, (job.tools || []).length - 1);
+        return changes * (Number(job.tcDurationMin) || 0);
     }
 
-    // grows (never shrinks) a job's duration to fit its tool-change timeline, snapped to the
-    // usual 15-minute grid - called any time a tool-change's start/length is edited
-    function growDurationForToolChanges(job, toolChanges) {
-        const spanHours = toolChangesSpanHours(toolChanges);
-        if (spanHours <= job.duration) return job.duration;
-        return Math.max(SNAP_HOURS, snapHours(spanHours));
-    }
+    function growDurationForToolChanges(job) { return job.duration; }
+    function assignStartMins(tc) { return tc; }
+    function toolChangesTotalHours(tc) { return 0; }
 
-    // builds an initial tool-change list from an NC file's parsed tool list (number/name) so
-    // the person doesn't have to retype which tools are used - only the timing (start/duration)
-    // is left blank for them to fill in themselves, since the NC file's theoretical estimate
-    // isn't reliable enough to assume as the real changeover timing.
     function toolChangesFromParsedTools(tools) {
         return (tools || []).map((t) => ({
             id: newId("tc"),
@@ -2169,51 +2539,65 @@ useEffect(() => {
         }));
     }
 
-    function addToolChange(jobId) {
-        setJobs((js) => js.map((j) => {
-            if (j.id !== jobId) return j;
-            const changes = j.toolChanges || [];
-            // continue from last segment end if available, otherwise start at minute 0
-            const last = changes[changes.length - 1];
-            const nextStart = last ? last.startMin + last.durationMin : 0;
-            const newChange = { id: newId("tc"), toolNumber: "", toolName: "New tool", startMin: nextStart, durationMin: 15 };
-            const nextChanges = [...changes, newChange];
-            return { ...j, toolChanges: nextChanges, tools: recomputeAggregatedTools(nextChanges), duration: growDurationForToolChanges(j, nextChanges) };
-        }));
-    }
-
-    function updateToolChange(jobId, changeId, patch) {
-        setJobs((js) => js.map((j) => {
-            if (j.id !== jobId) return j;
-            const nextChanges = (j.toolChanges || []).map((c) => (c.id === changeId ? { ...c, ...patch } : c));
-            return { ...j, toolChanges: nextChanges, tools: recomputeAggregatedTools(nextChanges), duration: growDurationForToolChanges(j, nextChanges) };
-        }));
-    }
-
-    function removeToolChange(jobId, changeId) {
-        setJobs((js) => js.map((j) => {
-            if (j.id !== jobId) return j;
-            const nextChanges = (j.toolChanges || []).filter((c) => c.id !== changeId);
-            return { ...j, toolChanges: nextChanges, tools: recomputeAggregatedTools(nextChanges) };
-        }));
-    }
-
-    // reorders the tool-change list (drag-and-drop) - times stay attached to each entry as-is,
-    // only the display/aggregation order changes
-    function reorderToolChanges(jobId, fromIdx, toIdx) {
-        setJobs((js) => js.map((j) => {
-            if (j.id !== jobId) return j;
-            const changes = [...(j.toolChanges || [])];
-            if (fromIdx < 0 || fromIdx >= changes.length || toIdx < 0 || toIdx >= changes.length) return j;
-            const [moved] = changes.splice(fromIdx, 1);
-            changes.splice(toIdx, 0, moved);
-            return { ...j, toolChanges: changes, tools: recomputeAggregatedTools(changes) };
-        }));
-    }
+    function addToolChange(jobId) {}
+    function updateToolChange(jobId, changeId, patch) {}
+    function removeToolChange(jobId, changeId) {}
+    function reorderToolChanges(jobId, fromIdx, toIdx) {}
 
     const selectedJob = jobs.find((j) => j.id === selectedJobId) || null;
     const selectedResource = resources.find((r) => r.id === selectedResourceId) || null;
     const toolKey = (t) => (t.number || "?") + "::" + t.name;
+
+    // group tools by machine for accordion — depends on toolKey so must come after it
+    const toolsByMachine = useMemo(() => {
+        const jobFilterBase = toolsJobFilter === "all"
+            ? visibleToolSummary
+            : visibleToolSummary.filter((t) => t.jobs.some((j) => j.id === toolsJobFilter));
+        // build a map: toolKey -> machineId for manual tools
+        const manualMachineMap = new Map();
+        toolHistory.forEach((h) => {
+            if (h.machineId) manualMachineMap.set((h.number || "?") + "::" + h.name, h.machineId);
+        });
+        // collect all resource ids that should appear (via jobs OR manual assignment)
+        const machineIds = new Set();
+        jobs.forEach((j) => { if (j.resourceId) machineIds.add(j.resourceId); });
+        manualMachineMap.forEach((mid) => machineIds.add(mid));
+        const allMachines = resources.filter((r) => machineIds.has(r.id)).sort((a, b) => a.name.localeCompare(b.name));
+        // apply machine filter
+        const machinesToShow = toolsMachineFilter === "all" ? allMachines : allMachines.filter((r) => r.id === toolsMachineFilter);
+        const groups = [];
+        machinesToShow.forEach((r) => {
+            const machineJobIds = new Set(jobs.filter((j) => j.resourceId === r.id).map((j) => j.id));
+            const machineTools = jobFilterBase.filter((t) => {
+                if (t.jobs.some((j) => machineJobIds.has(j.id))) return true;
+                // include manually assigned tools with no jobs
+                if (t.jobs.length === 0 && manualMachineMap.get(toolKey(t)) === r.id) return true;
+                return false;
+            });
+            if (machineTools.length > 0) groups.push({ id: r.id, name: r.name, tools: machineTools });
+        });
+        if (toolsMachineFilter === "all") {
+            const assignedToolKeys = new Set(groups.flatMap((g) => g.tools.map((t) => toolKey(t))));
+            const unassigned = jobFilterBase.filter((t) => !assignedToolKeys.has(toolKey(t)));
+            if (unassigned.length > 0) groups.push({ id: "__unassigned__", name: "Unassigned", tools: unassigned });
+        }
+        return groups;
+    }, [visibleToolSummary, toolsJobFilter, toolsMachineFilter, toolsMachineOptions, toolHistory, resources, jobs, toolKey]);
+
+    // track which machine group ids we have seen before — only auto-expand on first appearance
+    const seenMachineGroupsRef = useRef(new Set());
+
+    // auto-expand any machine group that isn't already tracked
+    useEffect(() => {
+        const newIds = toolsByMachine.map((g) => g.id).filter((id) => !seenMachineGroupsRef.current.has(id));
+        if (newIds.length === 0) return;
+        newIds.forEach((id) => seenMachineGroupsRef.current.add(id));
+        setExpandedMachines((prev) => {
+            const next = new Set(prev);
+            newIds.forEach((id) => next.add(id));
+            return next;
+        });
+    }, [toolsByMachine]);
 
     function updateToolMaxLife(t, newMaxLife) {
         const key = (t.number || "?") + "::" + t.name;
@@ -2227,8 +2611,123 @@ useEffect(() => {
             return [...prev, { number: t.number, name: t.name, actualHours: 0, jobNames: [], maxLife: newMaxLife || null }];
         });
     }
-    const selectedTool = (selectedToolKey ? visibleToolSummary.find((t) => toolKey(t) === selectedToolKey) : null) || visibleToolSummary[0] || null;
+    // log a tool change event with reason — called from ScanAction.jsx via window.__psLogToolChange
+    // and optionally from manual UI in the Tools page. Appends to toolHistory[].changeLog array.
+    function logToolChange({ number, name, jobName, reason, hoursAtChange }) {
+        const key = (number || "?") + "::" + name;
+        setToolHistory((prev) => {
+            const existing = prev.find((h) => (h.number || "?") + "::" + h.name === key);
+            const entry = { at: new Date().toISOString(), jobName: jobName || "", reason: reason || "other", hoursAtChange: hoursAtChange || 0 };
+            if (existing) {
+                return prev.map((h) =>
+                    (h.number || "?") + "::" + h.name === key
+                        ? { ...h, changeLog: [...(h.changeLog || []), entry] }
+                        : h
+                );
+            }
+            return [...prev, { number, name, actualHours: 0, jobNames: [], changeLog: [entry] }];
+        });
+    }
+
+    function changeToolAndReset({ number, name, jobName, reason, hoursAtChange }) {
+        const key = (number || "?") + "::" + name;
+        setToolHistory((prev) => {
+            const existing = prev.find((h) => (h.number || "?") + "::" + h.name === key);
+            const entry = { at: new Date().toISOString(), jobName: jobName || "", reason: reason || "other", hoursAtChange: hoursAtChange || 0 };
+            if (existing) {
+                return prev.map((h) =>
+                    (h.number || "?") + "::" + h.name === key
+                        ? { ...h, actualHours: 0, changeLog: [...(h.changeLog || []), entry] }
+                        : h
+                );
+            }
+            return [...prev, { number, name, actualHours: 0, jobNames: [], changeLog: [entry] }];
+        });
+    }
+
+    function updateToolMeta(key, patch) {
+        setToolMetadata((prev) => ({ ...prev, [key]: { ...(prev[key] || {}), ...patch } }));
+    }
+
+    // add a manually-created standalone tool (not tied to any job)
+    function addManualTool({ number, name, maxLife, machineId }) {
+        const key = (number || "?") + "::" + name;
+        setToolHistory((prev) => {
+            if (prev.find((h) => (h.number || "?") + "::" + h.name === key)) return prev;
+            return [...prev, { number, name, actualHours: 0, jobNames: [], manual: true, machineId: machineId || null, maxLife: maxLife || null }];
+        });
+        if (maxLife) setToolMetadata((prev) => ({ ...prev, [key]: { ...(prev[key] || {}), maxLife } }));
+    }
+
+    // delete a manually-added tool (only allowed when it has no active job assignments)
+    function deleteManualTool(key) {
+        setToolHistory((prev) => prev.filter((h) => (h.number || "?") + "::" + h.name !== key));
+        setToolMetadata((prev) => { const next = { ...prev }; delete next[key]; return next; });
+        setSelectedToolKey(null);
+        setConfirmDeleteToolKey(null);
+    }
+
+    // expose logToolChange globally so ScanAction.jsx can call it after a STOP scan
+    useEffect(() => {
+        window.__psLogToolChange = logToolChange;
+        return () => { delete window.__psLogToolChange; };
+    }, []);
+
+    // expose users list and machine-check helper so ScanAction.jsx can validate machine assignment
+    useEffect(() => {
+        window.__psUsers = users;
+        // Returns { allowed: bool, assignedMachineName: string|null, jobMachineName: string|null }
+        // ScanAction calls this before proceeding with a START/STOP scan
+        window.__psCheckUserMachine = (jobResourceId) => {
+            const username = sessionStorage.getItem("ps-user-id") || sessionStorage.getItem("ps-username");
+            const user = users.find((u) => u.username === username || u.id === username);
+            if (!user || user.role !== "operator" || !user.machineId) return { allowed: true, assignedMachineName: null, jobMachineName: null };
+            const assignedMachine = resources.find((r) => r.id === user.machineId);
+            const jobMachine = resources.find((r) => r.id === jobResourceId);
+            const allowed = user.machineId === jobResourceId;
+            return {
+                allowed,
+                assignedMachineName: assignedMachine ? assignedMachine.name : user.machineId,
+                jobMachineName: jobMachine ? jobMachine.name : (jobResourceId || "unassigned"),
+            };
+        };
+        return () => { delete window.__psUsers; delete window.__psCheckUserMachine; };
+    }, [users, resources]);
+
+    const selectedTool = selectedToolKey ? (visibleToolSummaryFiltered.find((t) => toolKey(t) === selectedToolKey) || toolsByMachine.flatMap((g) => g.tools).find((t) => toolKey(t) === selectedToolKey) || null) : null;
+
+    // init draft form values whenever a different tool is selected
+    useEffect(() => {
+        if (!selectedTool) return;
+        const key = toolKey(selectedTool);
+        const meta = toolMetadata[key] || {};
+        setToolDraft({
+            maxLife: selectedTool.maxLife || TOOL_LIFE_HOURS,
+            diameter: meta.diameter ?? "",
+            length: meta.length ?? "",
+            offsetZ: meta.offsetZ ?? "",
+            location: meta.location || "",
+            inventory: meta.inventory ?? "",
+        });
+    }, [selectedToolKey]);
     const conflictCount = conflictIds.size;
+
+    // fire near-limit toast alerts when any tool drops below 10% remaining life
+    useEffect(() => {
+        const NEAR_LIMIT_PCT = 90; // lifePct >= 90 means <= 10% remaining
+        toolSummary.forEach((t) => {
+            const key = toolKey(t);
+            const usedHours = t.actualHours + t.liveHours;
+            const refLife = t.maxLife || TOOL_LIFE_HOURS;
+            const lifePct = Math.min(100, (usedHours / refLife) * 100);
+            if (lifePct >= NEAR_LIMIT_PCT && !dismissedNearLimitKeys.has(key)) {
+                setNearLimitAlerts((prev) => {
+                    if (prev.some((a) => a.id === key)) return prev;
+                    return [...prev, { id: key, toolName: (t.number ? `T${t.number} · ` : "") + t.name, lifePct }];
+                });
+            }
+        });
+    }, [toolSummary, dismissedNearLimitKeys]);
 
     // time-of-day greeting shown on the Home page
     const homeGreeting = useMemo(() => {
@@ -2278,6 +2777,8 @@ useEffect(() => {
         .ps-sidebar:hover .ps-promo { opacity: 1; pointer-events: auto; }
         .ps-searchitem:hover { background: #EDEDED !important; }
         .ps-tool-sidebar-item:hover { background: #FFFFFF !important; }
+        @keyframes ps-fids-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .ps-fids-rows { animation: ps-fids-in 0.4s ease; }
         @keyframes ps-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(0,200,83,0.55); } 50% { box-shadow: 0 0 0 5px rgba(0,200,83,0); } }
         .ps-running-dot { animation: ps-pulse 1.4s ease-in-out infinite; }
         @keyframes ps-job-glow { 0%, 100% { box-shadow: 0 0 0 2px rgba(0,200,83,0.55), 0 3px 12px rgba(0,200,83,0.35); } 50% { box-shadow: 0 0 0 6px rgba(0,200,83,0.16), 0 3px 12px rgba(0,200,83,0.35); } }
@@ -2337,52 +2838,70 @@ useEffect(() => {
       `}</style>
 
             <div style={styles.floatCard}>
-                <nav className="ps-sidebar" style={styles.sidebar}>
+                <nav className="ps-sidebar" style={{ ...styles.sidebar, display: focusMode ? "none" : undefined }}>
                     <div style={styles.sidebarBrand}>
                         <div style={styles.sidebarLogo}>PS</div>
                         <span className="ps-navlabel" style={styles.sidebarBrandText}>ProdSched</span>
                     </div>
                     <div style={styles.sidebarNavGroup}>
-                        {NAV_ITEMS.map(({ id, label, Icon }) => {
-                            const active = activeNav === id;
+                        {NAV_GROUPS.map((group) => {
+                            // hide admin group entirely for non-admins
+                            if (group.adminOnly && !isAdmin) return null;
+                            const visibleItems = group.items.filter(({ id }) => {
+                                if (id === "qrcodes") return currentRole !== "viewer";
+                                return true;
+                            });
+                            if (visibleItems.length === 0) return null;
                             return (
-                                <button
-                                    key={id}
-                                    className="ps-navbtn"
-                                    title={label}
-                                    onClick={() => setActiveNav(id)}
-                                    style={{
-                                        ...styles.sidebarBtn,
-                                        background: active ? "#1B6E8C" : "transparent",
-                                        color: active ? "#FFFFFF" : "#404040",
-                                        boxShadow: active ? "0 4px 10px rgba(38,38,38,0.18)" : "none",
-                                        fontWeight: active ? 600 : 500,
-                                    }}
-                                >
-                                    <Icon size={17} strokeWidth={2} style={{ flexShrink: 0 }} />
-                                    <span className="ps-navlabel" style={styles.sidebarBtnLabel}>{label}</span>
-                                </button>
+                                <div key={group.label}>
+                                    {/* group label — only visible when sidebar is expanded */}
+                                    <div className="ps-navlabel" style={{ fontSize: 9.5, fontWeight: 700, color: "#ABABAB", letterSpacing: "0.08em", textTransform: "uppercase", padding: "10px 14px 4px", whiteSpace: "nowrap" }}>
+                                        {group.label}
+                                    </div>
+                                    {visibleItems.map(({ id, label, Icon }) => {
+                                        const active = activeNav === id;
+                                        return (
+                                            <button
+                                                key={id}
+                                                className="ps-navbtn"
+                                                title={label}
+                                                onClick={() => setActiveNav(id)}
+                                                style={{
+                                                    ...styles.sidebarBtn,
+                                                    background: active ? "#1B6E8C" : "transparent",
+                                                    color: active ? "#FFFFFF" : "#404040",
+                                                    boxShadow: active ? "0 4px 10px rgba(38,38,38,0.18)" : "none",
+                                                    fontWeight: active ? 600 : 500,
+                                                }}
+                                            >
+                                                <Icon size={17} strokeWidth={2} style={{ flexShrink: 0 }} />
+                                                <span className="ps-navlabel" style={styles.sidebarBtnLabel}>{label}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
                             );
                         })}
                     </div>
                     <div style={{ flex: 1 }} />
-                    <div className="ps-promo" style={styles.sidebarPromo}>
-                        <div style={styles.sidebarPromoIcon}>
-                            <AlertTriangle size={18} color="#1B6E8C" />
-                        </div>
-                        <span style={styles.sidebarPromoText}>
-                            {conflictCount > 0 ? `${conflictCount} conflict${conflictCount !== 1 ? "s" : ""} need attention` : "All schedules are conflict-free"}
-                        </span>
-                        <button
-                            className="ps-upgradebtn"
-                            style={styles.sidebarPromoBtn}
-                            onClick={() => setActiveNav("analytics")}
-                        >
-                            View analytics
-                        </button>
-                    </div>
 
                     <div style={styles.sidebarLogoutWrap}>
+                        {/* current user info — visible only when sidebar is expanded */}
+                        <div className="ps-promo" style={{ padding: "8px 10px 10px", marginBottom: 4 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                                <div style={{ width: 28, height: 28, borderRadius: "50%", background: roleMeta(currentRole).color + "22", border: `2px solid ${roleMeta(currentRole).color}55`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                    {(() => { const R = roleMeta(currentRole); return <R.Icon size={13} color={R.color} />; })()}
+                                </div>
+                                <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontSize: 12, fontWeight: 700, color: "#262626", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                        {sessionStorage.getItem("ps-username") || "—"}
+                                    </div>
+                                    <div style={{ fontSize: 10.5, color: roleMeta(currentRole).color, fontWeight: 600 }}>
+                                        {roleMeta(currentRole).label}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                         <button className="ps-logoutbtn" title="Log out" onClick={handleLogout} style={styles.sidebarLogoutBtn}>
                             <LogOut size={17} strokeWidth={2} style={{ flexShrink: 0 }} />
                             <span className="ps-navlabel" style={styles.sidebarBtnLabel}>Log out</span>
@@ -2390,12 +2909,12 @@ useEffect(() => {
                     </div>
                 </nav>
 
-                <div style={styles.app}>
+                <div style={{ ...styles.app, marginLeft: focusMode ? 0 : 76, transition: "margin-left 0.22s ease" }}>
                     {!focusMode && (
                     <div style={styles.toolbar}>
                         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
                             <span style={styles.appTitle}>
-                                {activeNav === "home" ? "Home" : activeNav === "analytics" ? "Analytics" : activeNav === "tools" ? "Tools" : activeNav === "qrcodes" ? "QR Codes" : activeNav === "shifts" ? "Shifts" : activeNav === "history" ? "History" : activeNav === "settings" ? "Settings" : "Production Scheduler"}
+                                {activeNav === "home" ? "Home" : activeNav === "analytics" ? "Analytics" : activeNav === "tools" ? "Tools" : activeNav === "qrcodes" ? "QR Codes" : activeNav === "shifts" ? "Shifts" : activeNav === "history" ? "History" : activeNav === "users" ? "Users" : activeNav === "settings" ? "Settings" : "Production Scheduler"}
                             </span>
                             <span style={styles.appSub}>from {baseDate.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} · {DAYS} day{DAYS !== 1 ? "s" : ""} shown</span>
                         </div>
@@ -2498,10 +3017,33 @@ useEffect(() => {
                                         <Printer size={13} /> Print / PDF
                                     </button>
                                     <div style={{ width: 1, height: 20, background: "#C8C8C8" }} />
+                                    {simulatedJobIds.size === 0 ? (
+                                        <button
+                                            className="ps-zoombtn"
+                                            style={{ ...styles.zoomBtn, width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center", background: "#F0F7FF", color: "#1B6E8C", borderColor: "#9FCDE0" }}
+                                            onClick={runSimulation}
+                                            title="Simulate: fill empty slots in the next 2 days with demo jobs"
+                                        >
+                                            <Cpu size={13} /> Simulate
+                                        </button>
+                                    ) : (
+                                        <button
+                                            className="ps-zoombtn"
+                                            style={{ ...styles.zoomBtn, width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center", background: "#FFF3D6", color: "#92400E", borderColor: "#F0D08A" }}
+                                            onClick={clearSimulation}
+                                            title="Remove all simulated jobs"
+                                        >
+                                            <X size={13} /> Clear Sim ({simulatedJobIds.size})
+                                        </button>
+                                    )}
+                                    <div style={{ width: 1, height: 20, background: "#C8C8C8" }} />
                                     <button
                                         className="ps-zoombtn"
                                         style={styles.zoomBtn}
-                                        onClick={() => setFocusMode(true)}
+                                        onClick={() => {
+                                            setFocusMode(true);
+                                            document.documentElement.requestFullscreen?.().catch(() => {});
+                                        }}
                                         title="Focus mode — hide sidebar, show Gantt + unscheduled pool only"
                                     >
                                         <Maximize2 size={14} />
@@ -2513,9 +3055,44 @@ useEffect(() => {
                     )}
 
                     {focusMode && (
-                        <button style={styles.focusExitBtn} onClick={() => setFocusMode(false)} title="Exit focus mode">
+                        <button style={styles.focusExitBtn} onClick={() => { setFocusMode(false); document.exitFullscreen?.().catch(() => {}); }} title="Exit focus mode">
                             <Minimize2 size={15} />
                         </button>
+                    )}
+
+                    {focusMode && (() => {
+                        const totalPages = Math.ceil(resources.length / fidsRowsPerPage);
+                        if (totalPages <= 1) return null;
+                        return (
+                            <div style={{ position: "fixed", bottom: 18, right: 18, zIndex: 300, display: "flex", alignItems: "center", gap: 4, background: "rgba(27,110,140,0.85)", backdropFilter: "blur(6px)", borderRadius: 20, padding: "5px 12px", boxShadow: "0 2px 12px rgba(0,0,0,0.18)" }}>
+                                {Array.from({ length: totalPages }).map((_, i) => (
+                                    <div key={i} onClick={() => setFidsPage(i)} style={{ width: i === fidsPage ? 18 : 6, height: 6, borderRadius: 3, background: i === fidsPage ? "#FFFFFF" : "rgba(255,255,255,0.35)", cursor: "pointer", transition: "width 0.3s ease, background 0.3s ease" }} />
+                                ))}
+                                <span style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", marginLeft: 4, fontFamily: "'IBM Plex Mono',monospace" }}>
+                                    {fidsPage + 1}/{totalPages}
+                                </span>
+                            </div>
+                        );
+                    })()}
+
+                    {nearLimitAlerts.length > 0 && !focusMode && (
+                        <div style={{ position: "fixed", bottom: 80, right: 18, zIndex: 200, display: "flex", flexDirection: "column-reverse", gap: 6, pointerEvents: "none" }}>
+                            {nearLimitAlerts.map((alert) => (
+                                <div key={alert.id} style={{ display: "flex", alignItems: "center", gap: 8, background: alert.lifePct >= 100 ? "#FDECEB" : "#FDF3E4", border: `1px solid ${alert.lifePct >= 100 ? "#F7CFCB" : "#F3DDAE"}`, borderRadius: 8, padding: "8px 12px", boxShadow: "0 2px 10px rgba(0,0,0,0.12)", maxWidth: 320, pointerEvents: "auto" }}>
+                                    <AlertOctagon size={14} color={alert.lifePct >= 100 ? ALARM_RED_DARK : OVERDUE_AMBER} style={{ flexShrink: 0 }} />
+                                    <span style={{ flex: 1, fontSize: 12, color: alert.lifePct >= 100 ? "#7A1A14" : "#7C4A0A", lineHeight: 1.35 }}>
+                                        <strong>{alert.toolName}</strong> — {alert.lifePct >= 100 ? "expired, replace now" : `${(100 - alert.lifePct).toFixed(0)}% life remaining`}
+                                    </span>
+                                    <button
+                                        style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#8C8C8C", flexShrink: 0 }}
+                                        onClick={() => {
+                                            setDismissedNearLimitKeys((prev) => new Set([...prev, alert.id]));
+                                            setNearLimitAlerts((prev) => prev.filter((a) => a.id !== alert.id));
+                                        }}
+                                    ><X size={12} /></button>
+                                </div>
+                            ))}
+                        </div>
                     )}
 
                     {(runningNow.length > 0 || activeAlarms.length > 0) && !focusMode && (
@@ -2986,6 +3563,7 @@ useEffect(() => {
                             </div>
                             )}
 
+                            <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
                             <div
                                 ref={gridScrollRef}
                                 className="ps-scroll"
@@ -3000,7 +3578,10 @@ useEffect(() => {
                                     <div style={{ ...styles.headerRow, width: RESOURCE_COL_WIDTH + timelineWidth }}>
                                         <div style={styles.cornerCell}>
                                             resource
-                                            <button className="ps-addbtn" style={styles.addResBtn} onClick={addResource}>+</button>
+                                            <div style={{ display: "flex", gap: 4 }}>
+                                                <button className="ps-addbtn" title="Manage machine groups" style={{ ...styles.addResBtn, width: 24, background: "#6E6E6E" }} onClick={openNewGroup}><Layers size={11} /></button>
+                                                <button className="ps-addbtn" style={styles.addResBtn} onClick={addResource}>+</button>
+                                            </div>
                                         </div>
                                         <div style={{ position: "relative", width: timelineWidth, height: HEADER_HEIGHT, background: "#FFFFFF" }}>
                                             {Array.from({ length: DAYS }).map((_, d) => {
@@ -3113,17 +3694,17 @@ useEffect(() => {
                                         </div>
                                     </div>
 
-                                    {resources.map((r, rowIndex) => {
+                                    {fidsResources.map((r, rowIndex) => {
                                         const meta = STATUS_META[r.status];
                                         return (
-                                            <div key={r.id} style={{ display: "flex", height: ROW_HEIGHT }}>
+                                            <div key={`${fidsPage}-${r.id}`} className={focusMode ? "ps-fids-rows" : undefined} style={{ display: "flex", height: ROW_HEIGHT, animationDelay: focusMode ? `${rowIndex * 30}ms` : undefined }}>
                                                 <div
                                                     className={r.alarmActive ? "ps-alarm-row" : undefined}
                                                     style={{
                                                         ...styles.resourceCell,
                                                         cursor: "pointer",
                                                         background: selectedResourceId === r.id ? "#EDEDED" : "#FFFFFF",
-                                                        borderLeft: r.alarmActive ? `3px solid ${ALARM_RED}` : "3px solid transparent",
+                                                        borderLeft: r.alarmActive ? `3px solid ${ALARM_RED}` : (() => { const grp = getResourceGroup(r.id); return grp ? `3px solid ${grp.color}` : "3px solid transparent"; })(),
                                                     }}
                                                     onPointerDown={(e) => e.stopPropagation()}
                                                     onClick={() => {
@@ -3137,6 +3718,7 @@ useEffect(() => {
                                                         {r.alarmActive && <AlertOctagon size={12} color={ALARM_RED} strokeWidth={2.5} />}
                                                     </div>
                                                     <span style={styles.resourceType}>{r.type}</span>
+                                                    {(() => { const grp = getResourceGroup(r.id); return grp ? <span style={{ fontSize: 9, fontWeight: 700, color: grp.color, letterSpacing: "0.04em", background: grp.color + "18", borderRadius: 2, padding: "1px 4px", alignSelf: "flex-start" }}>{grp.name.toUpperCase()}</span> : null; })()}
                                                     <div style={styles.utilTrack}>
                                                         <div style={{ ...styles.utilFill, width: `${utilization[r.id]}%` }} />
                                                     </div>
@@ -3208,37 +3790,96 @@ useEffect(() => {
                                                             const blocked = isJobBlocked(job);
                                                             // scheduled window is over but the job never got scanned start/stop
                                                             const isDone = !!job.completed;
-                                                            const isOverdue = !isDone && !job.isRunning && !blocked && job.startHour + job.duration < nowHour;
+                                                            const setupH = (job.setupMin || 0) / 60;
+                                                            const tcTotalMin = jobTcTotalMin(job);
+                                                            const tcH = tcTotalMin / 60;
+                                                            const totalH = jobTotalHours(job);
+                                                            const isOverdue = !isDone && !job.isRunning && !blocked && job.startHour + totalH < nowHour;
+                                                            const jobBorderColor = blocked ? ALARM_RED : isOverdue ? OVERDUE_AMBER_BORDER : isConflict ? "#F0625B" : isDone ? DONE_BLUE : color;
+                                                            const jobBg = blocked ? "#FBE4E2" : job.isRunning ? JOB_RUNNING_GREEN : isDone ? "#E3F0FB" : isOverdue ? OVERDUE_AMBER_BG : job.locked ? `${color}22` : `${color}40`;
                                                             return (
+                                                                <React.Fragment key={job.id}>
+                                                                {/* ── Single unified block: [setup][tool change][job] ── */}
                                                                 <div
-                                                                    key={job.id}
                                                                     className={`ps-job${job.isRunning && !blocked ? " ps-job-running" : ""}`}
                                                                     onPointerDown={(e) => onJobPointerDown(e, job, "move")}
                                                                     style={{
                                                                         position: "absolute",
                                                                         left: job.startHour * hourWidth,
-                                                                        width: Math.max(6, job.duration * hourWidth - 2),
+                                                                        width: Math.max(6, totalH * hourWidth - 2),
                                                                         top: 5,
                                                                         height: ROW_HEIGHT - 28,
-background: blocked ? "#FBE4E2" : job.isRunning ? JOB_RUNNING_GREEN : isDone ? "#E3F0FB" : isOverdue ? OVERDUE_AMBER_BG : job.locked ? `${color}22` : `${color}40`,
-border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_AMBER_BORDER}` : isConflict ? "1px solid #F0625B" : isDone ? `1px solid ${DONE_BLUE}55` : job.locked ? `1px solid ${color}77` : `1px solid ${color}AA`,
+                                                                        display: "flex",
+                                                                        flexDirection: "row",
+                                                                        border: `1px solid ${jobBorderColor}`,
                                                                         borderLeftWidth: 4,
-                                                                        borderLeftColor: blocked ? ALARM_RED : isOverdue ? OVERDUE_AMBER_BORDER : isDone ? DONE_BLUE : color,
+                                                                        borderLeftColor: jobBorderColor,
+                                                                        borderRadius: 3,
+                                                                        overflow: "hidden",
+                                                                        boxSizing: "border-box",
                                                                         boxShadow: bulkSelected
                                                                             ? `0 0 0 2px #1B6E8C, 0 0 0 4px rgba(27,110,140,0.25)`
                                                                             : selected
                                                                             ? `0 0 0 2px ${color}55, 0 4px 10px rgba(27,110,140,0.12)`
                                                                             : "0 1px 4px rgba(27,110,140,0.08)",
-                                                                        borderRadius: 3,
                                                                         cursor: blocked ? "not-allowed" : job.locked ? "pointer" : "grab",
-                                                                        overflow: "hidden",
                                                                         userSelect: "none",
-                                                                        boxSizing: "border-box",
                                                                         opacity: dimmed ? 0.28 : 1,
                                                                         filter: dimmed ? "grayscale(0.4)" : "none",
                                                                         transition: "opacity 0.15s ease",
+                                                                        zIndex: 2,
                                                                     }}
                                                                 >
+                                                                    {/* setup section */}
+                                                                    {setupH > 0 && (
+                                                                        <div
+                                                                            title={`Setup: ${job.setupMin}min`}
+                                                                            style={{
+                                                                                width: `${(setupH / totalH) * 100}%`,
+                                                                                flexShrink: 0,
+                                                                                background: "rgba(180,83,9,0.10)",
+                                                                                borderRight: "1px dashed rgba(180,83,9,0.45)",
+                                                                                display: "flex",
+                                                                                alignItems: "center",
+                                                                                justifyContent: "center",
+                                                                                gap: 3,
+                                                                                overflow: "hidden",
+                                                                            }}
+                                                                        >
+                                                                            <Cog size={10} color="#B45309" style={{ flexShrink: 0 }} />
+                                                                            {(setupH / totalH) * totalH * hourWidth > 36 && (
+                                                                                <span style={{ fontSize: 9, color: "#B45309", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" }}>
+                                                                                    {job.setupMin}m
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
+                                                                    )}
+                                                                    {/* tool-change section */}
+                                                                    {tcH > 0 && (
+                                                                        <div
+                                                                            title={`Tool changes: ${Math.max(0,(job.tools||[]).length-1)}× · ${job.tcDurationMin}min each · ${tcTotalMin}min total`}
+                                                                            style={{
+                                                                                width: `${(tcH / totalH) * 100}%`,
+                                                                                flexShrink: 0,
+                                                                                background: "rgba(234,179,8,0.12)",
+                                                                                borderRight: "1px dashed rgba(180,83,9,0.45)",
+                                                                                display: "flex",
+                                                                                alignItems: "center",
+                                                                                justifyContent: "center",
+                                                                                gap: 3,
+                                                                                overflow: "hidden",
+                                                                            }}
+                                                                        >
+                                                                            <Wrench size={10} color="#B45309" style={{ flexShrink: 0 }} />
+                                                                            {(tcH / totalH) * totalH * hourWidth > 36 && (
+                                                                                <span style={{ fontSize: 9, color: "#B45309", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap" }}>
+                                                                                    {tcTotalMin}m
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
+                                                                    )}
+                                                                    {/* main job section */}
+                                                                    <div style={{ flex: 1, position: "relative", background: jobBg, minWidth: 0, overflow: "hidden" }}>
                                                                     {(job.locked || blocked) && (
                                                                         <div
                                                                             style={{
@@ -3292,7 +3933,9 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                                 OVERDUE
                                                                             </div>
                                                                         ) : (
-                                                                            <div style={{ fontSize: 10, color: "#6E6E6E", whiteSpace: "nowrap" }}>{job.duration}h</div>
+                                                                            <div style={{ fontSize: 10, color: "#6E6E6E", whiteSpace: "nowrap" }}>
+                                                                                {totalH % 1 === 0 ? totalH.toFixed(0) : totalH.toFixed(2)}h
+                                                                            </div>
                                                                         )}
                                                                     </div>
                                                                     {isConflict && <AlertTriangle size={11} color="#F0625B" style={{ position: "absolute", top: 4, right: 4, zIndex: 2 }} />}
@@ -3307,21 +3950,9 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                                             style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 8, cursor: "ew-resize" }}
                                                                         />
                                                                     )}
-                                                                    {(job.toolChanges || []).length > 0 && (() => {
-                                                                        const totalJobMin = job.duration * 60;
-                                                                        return (
-                                                                            <div style={{ position: "absolute", left: 4, right: 4, bottom: 3, height: 4, borderRadius: 2, background: "rgba(0,0,0,0.08)", overflow: "hidden", pointerEvents: "none" }}
-                                                                                title={`Tool changes: ${(job.toolChanges||[]).length} step${(job.toolChanges||[]).length!==1?"s":""} · ${job.toolChanges.reduce((s,c)=>s+(Number(c.durationMin)||0),0)}min total`}>
-                                                                                {(job.toolChanges||[]).map((c,ci) => {
-                                                                                    const startPct = Math.min(100, ((Number(c.startMin)||0)/totalJobMin)*100);
-                                                                                    const widthPct = Math.min(100-startPct, ((Number(c.durationMin)||0)/totalJobMin)*100);
-                                                                                    if (widthPct <= 0) return null;
-                                                                                    return <div key={c.id||ci} style={{ position:"absolute", left:`${startPct}%`, width:`${widthPct}%`, top:0, bottom:0, background: job.isRunning?"rgba(255,255,255,0.75)":"#E8A33D", borderRadius:2 }} />;
-                                                                                })}
-                                                                            </div>
-                                                                        );
-                                                                    })()}
-                                                                </div>
+                                                                    </div>{/* end job section */}
+                                                                </div>{/* end unified container */}
+                                                                </React.Fragment>
                                                             );
                                                         })}
                                                     {/* ── Actual-run bars: grey bg at real scan-start, fill = elapsed ── */}
@@ -3334,7 +3965,7 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                                             const runStart = new Date(job.runStartedAt);
                                                             const barStartH = (runStart.getTime() - baseDate.getTime()) / 3600000;
                                                             if (barStartH < 0) return null;
-                                                            const bgW = Math.max(6, job.duration * hourWidth);
+                                                            const bgW = Math.max(6, jobTotalHours(job) * hourWidth);
                                                             const elapsedH = job.isRunning
                                                                 ? Math.max(0, (nowTick - runStart.getTime()) / 3600000)
                                                                 : (job.actualRunHours || 0);
@@ -3428,10 +4059,14 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 ref={poolRef}
                                 style={{
                                     ...styles.pool,
+                                    display: focusMode ? "none" : undefined,
+                                    height: poolHeight,
+                                    overflowY: "auto",
                                     border: isDraggingNC ? "2px dashed #1B6E8C" : "2px dashed transparent",
                                     background: isDraggingNC ? "#E3F0FB" : styles.pool.background,
                                     transition: "background 0.12s ease, border-color 0.12s ease",
                                     boxSizing: "border-box",
+                                    position: "relative",
                                 }}
                                 onDragOver={(e) => {
                                     if (Array.from(e.dataTransfer.items || []).some((it) => it.kind === "file")) {
@@ -3445,93 +4080,154 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 }}
                                 onDrop={handleNCDrop}
                             >
-                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-                                    <div style={styles.poolLabel}>
-                                        unscheduled ({poolJobs.length})
-                                        {isDraggingNC && <span style={{ marginLeft: 8, color: "#1B6E8C", textTransform: "none" }}>Drop NC files here</span>}
-                                    </div>
-                                    <div style={{ display: "flex", gap: 8 }}>
-                                        <input
-                                            ref={ncFileInputRef}
-                                            type="file"
-                                            accept=".nc,.tap,.cnc,.gcode,.nc1,.mpf,.eia,.txt"
-                                            multiple
-                                            style={{ display: "none" }}
-                                            onChange={handleNCBrowseChange}
-                                        />
-                                        <button
-                                            className="ps-addbtn"
-                                            style={{ ...styles.addJobBtn, background: "#404040", border: "1px solid #404040", display: "flex", alignItems: "center", gap: 5 }}
-                                            onClick={() => ncFileInputRef.current?.click()}
-                                            title="Select NC files to create jobs with estimated durations"
-                                        >
-                                            <Upload size={12} /> import NC
-                                        </button>
-                                        <button className="ps-addbtn" style={styles.addJobBtn} onClick={addJob}>
-                                            + new job
-                                        </button>
-                                    </div>
+                                {/* resize handle */}
+                                <div
+                                    ref={poolResizeRef}
+                                    style={{ position: "absolute", top: 0, left: 0, right: 0, height: 6, cursor: "ns-resize", zIndex: 10, display: "flex", alignItems: "center", justifyContent: "center" }}
+                                    onPointerDown={(e) => {
+                                        e.preventDefault();
+                                        const startY = e.clientY;
+                                        const startH = poolHeight;
+                                        const onMove = (me) => {
+                                            const delta = startY - me.clientY;
+                                            setPoolHeight(Math.max(80, Math.min(600, startH + delta)));
+                                        };
+                                        const onUp = () => {
+                                            window.removeEventListener("pointermove", onMove);
+                                            window.removeEventListener("pointerup", onUp);
+                                        };
+                                        window.addEventListener("pointermove", onMove);
+                                        window.addEventListener("pointerup", onUp);
+                                    }}
+                                >
+                                    <div style={{ width: 32, height: 3, borderRadius: 2, background: "#C8C8C8" }} />
                                 </div>
-                                {ncImportNotices.length > 0 && (
-                                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
-                                        {ncImportNotices.map((n) => (
-                                            <div key={n.id} style={{ ...styles.ncNotice, ...styles[`ncNotice_${n.type}`] }}>
-                                                <span style={{ flex: 1, minWidth: 0 }}>{n.text}</span>
-                                                <button
-                                                    style={styles.ncNoticeClose}
-                                                    onClick={() => setNcImportNotices((ns) => ns.filter((x) => x.id !== n.id))}
-                                                >
-                                                    <X size={11} />
-                                                </button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                                <div style={styles.poolStrip}>
-                                    {poolJobs.map((job) => {
-                                        const dimmed = isFilterActive && !jobMatchesFilter(job);
+                                {/* header row */}
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexShrink: 0, paddingTop: 6 }}>
+                                    <div style={styles.poolLabel}>unscheduled ({poolJobs.length})</div>
+                                    {isDraggingNC && <span style={{ fontSize: 10, color: "#1B6E8C" }}>Drop NC files here</span>}
+                                    {/* machine filter dropdown + label */}
+                                    {(() => {
+                                        const allFolders = [...new Set(poolJobs.map((j) => j.ncFilePath ? j.ncFilePath.split(/[\\/]/)[0] : "__manual__"))];
+                                        if (allFolders.length < 2) return null;
                                         return (
-                                            <div
-                                                key={job.id}
-                                                className="ps-chip"
-                                                onPointerDown={(e) => onPoolPointerDown(e, job)}
-                                                onClick={() => setSelectedJobId(job.id)}
-                                                style={{
-                                                    ...styles.chip,
-                                                    borderLeft: `4px solid ${job.isRunning ? RUNNING_GREEN : PRODUCTS[job.product]}`,
-                                                    background: job.isRunning ? "#E3F5E9" : "#FFFFFF",
-                                                    boxShadow: selectedJobId === job.id ? `0 0 0 2px ${PRODUCTS[job.product]}55` : job.isRunning ? "0 0 0 1px #A8DDBB" : "0 1px 4px rgba(27,110,140,0.08)",
-                                                    opacity: dimmed ? 0.28 : 1,
-                                                    filter: dimmed ? "grayscale(0.4)" : "none",
-                                                    transition: "opacity 0.15s ease",
-                                                }}
-                                            >
-                                                <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, color: "#262626" }}>{job.name}</div>
-                                                <div style={{ fontSize: 10, color: "#6E6E6E" }}>{job.product} · {job.duration}h</div>
-                                                {job.isRunning && (
-                                                    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9.5, fontWeight: 800, color: RUNNING_GREEN_DARK, letterSpacing: "0.05em", marginTop: 2 }}>
-                                                        <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 }} />
-                                                        RUNNING · not scheduled yet
-                                                    </div>
-                                                )}
-                                                {job.ncFileName && (
-                                                    <div style={{ fontSize: 9.5, color: "#1B6E8C", marginTop: 2, display: "flex", alignItems: "center", gap: 3 }}>
-                                                        <Upload size={9} /> {job.ncSource === "comment" ? "from NC header" : "estimated"}
-                                                    </div>
-                                                )}
-                                                {job.tools && job.tools.length > 0 && (
-                                                    <div style={{ fontSize: 9.5, color: "#595959", marginTop: 2, display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap" }}>
-                                                        <Wrench size={9} />
-                                                        {job.tools[0].name}
-                                                        {job.tools.length > 1 && ` +${job.tools.length - 1}`}
+                                            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                                <select
+                                                    className="ps-input"
+                                                    value={poolMachineFilter}
+                                                    onChange={(e) => setPoolMachineFilter(e.target.value)}
+                                                    style={{ fontSize: 10, padding: "2px 6px", height: 22, borderRadius: 3, border: "1px solid #D9D9D9", background: "#fff", color: "#404040", cursor: "pointer" }}
+                                                >
+                                                    <option value="all">all machines</option>
+                                                    {allFolders.map((f) => (
+                                                        <option key={f} value={f}>{f === "__manual__" ? "manual" : f.toUpperCase()}</option>
+                                                    ))}
+                                                </select>
+                                                {poolMachineFilter !== "all" && (
+                                                    <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, whiteSpace: "nowrap" }}>
+                                                        <Cpu size={10} color="#1B6E8C" />
+                                                        <span style={{ fontSize: 10, fontWeight: 700, color: "#1B6E8C", letterSpacing: "0.06em" }}>
+                                                            {poolMachineFilter === "__manual__" ? "MANUAL" : poolMachineFilter.toUpperCase()}
+                                                        </span>
+                                                        <span style={{ fontSize: 9.5, color: "#ABABAB" }}>
+                                                            · {poolJobs.filter((j) => (j.ncFilePath ? j.ncFilePath.split(/[\\/]/)[0] : "__manual__") === poolMachineFilter).length} jobs
+                                                        </span>
                                                     </div>
                                                 )}
                                             </div>
                                         );
-                                    })}
-                                    {poolJobs.length === 0 && <div style={styles.poolEmpty}>all jobs scheduled</div>}
+                                    })()}
+                                    <div style={{ flex: 1 }} />
+                                    <input ref={ncFileInputRef} type="file" accept=".nc,.tap,.cnc,.gcode,.nc1,.mpf,.eia,.txt" multiple style={{ display: "none" }} onChange={handleNCBrowseChange} />
+                                    <button className="ps-addbtn" style={{ ...styles.addJobBtn, background: "#404040", border: "1px solid #404040", display: "flex", alignItems: "center", gap: 4 }} onClick={() => ncFileInputRef.current?.click()}>
+                                        <Upload size={11} /> import NC
+                                    </button>
+                                    <button className="ps-addbtn" style={{ ...styles.addJobBtn, background: ncFolderUpdating ? "#0e4d63" : "#1B6E8C", border: "1px solid #1B6E8C", display: "flex", alignItems: "center", gap: 4, opacity: ncFolderUpdating ? 0.7 : 1 }} onClick={handleUpdateFromFolder} disabled={ncFolderUpdating}>
+                                        {ncFolderUpdating ? <><RotateCcw size={11} style={{ animation: "spin 1s linear infinite" }} /> updating...</> : <><Cpu size={11} /> Update</>}
+                                    </button>
+                                    <button className="ps-addbtn" style={styles.addJobBtn} onClick={addJob}>+ new job</button>
+                                </div>
+                                {ncImportNotices.length > 0 && (
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 6, flexShrink: 0 }}>
+                                        {ncImportNotices.map((n) => (
+                                            <div key={n.id} style={{ ...styles.ncNotice, ...styles[`ncNotice_${n.type}`] }}>
+                                                <span style={{ flex: 1, minWidth: 0 }}>{n.text}</span>
+                                                <button style={styles.ncNoticeClose} onClick={() => setNcImportNotices((ns) => ns.filter((x) => x.id !== n.id))}><X size={11} /></button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                {/* scrollable pool body */}
+                                <div className="ps-scroll" style={{ overflowY: "visible", overflowX: poolMachineFilter === "all" ? "hidden" : "auto" }}>
+                                    {(() => {
+                                        const filteredPool = poolMachineFilter === "all"
+                                            ? poolJobs
+                                            : poolJobs.filter((j) => {
+                                                const folder = j.ncFilePath ? j.ncFilePath.split(/[\\/]/)[0] : "__manual__";
+                                                return folder === poolMachineFilter;
+                                            });
+                                        if (filteredPool.length === 0) return <div style={styles.poolEmpty}>{poolJobs.length === 0 ? "all jobs scheduled" : "no jobs for this machine"}</div>;
+
+                                        if (poolMachineFilter !== "all") {
+                                            // single machine - horizontal scroll
+                                            return (
+                                                <div style={{ display: "flex", flexWrap: "nowrap", gap: 6, paddingBottom: 4 }}>
+                                                    {filteredPool.map((job) => {
+                                                        const dimmed = isFilterActive && !jobMatchesFilter(job);
+                                                        return (
+                                                            <div key={job.id} className="ps-chip" onPointerDown={(e) => onPoolPointerDown(e, job)} onClick={() => setSelectedJobId(job.id)}
+                                                                style={{ ...styles.chip, borderLeft: `3px solid ${job.isRunning ? RUNNING_GREEN : PRODUCTS[job.product]}`, background: job.isRunning ? "#E3F5E9" : "#FFFFFF", boxShadow: selectedJobId === job.id ? `0 0 0 2px ${PRODUCTS[job.product]}55` : "0 1px 3px rgba(27,110,140,0.07)", opacity: dimmed ? 0.28 : 1, filter: dimmed ? "grayscale(0.4)" : "none" }}>
+                                                                <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: "#262626", lineHeight: 1.3, whiteSpace: "nowrap" }}>{job.name}</div>
+                                                                <div style={{ fontSize: 10, color: "#6E6E6E", whiteSpace: "nowrap" }}>{job.duration}h</div>
+                                                                {job.isRunning && <div style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9, fontWeight: 800, color: RUNNING_GREEN_DARK, marginTop: 1 }}><span className="ps-running-dot" style={{ width: 4, height: 4, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 }} />RUNNING</div>}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            );
+                                        }
+
+                                        // all machines - grouped by machine with header
+                                        const groups = [];
+                                        const groupMap = new Map();
+                                        filteredPool.forEach((job) => {
+                                            const folder = job.ncFilePath ? job.ncFilePath.split(/[\\/]/)[0] : "__manual__";
+                                            const label = folder === "__manual__" ? "Manual" : folder.toUpperCase();
+                                            if (!groupMap.has(label)) { groupMap.set(label, []); groups.push(label); }
+                                            groupMap.get(label).push(job);
+                                        });
+
+                                        return (
+                                            <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingBottom: 4 }}>
+                                                {groups.map((label) => (
+                                                    <div key={label}>
+                                                        <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 5 }}>
+                                                            <Cpu size={9} color="#1B6E8C" />
+                                                            <span style={{ fontSize: 9.5, fontWeight: 700, color: "#1B6E8C", letterSpacing: "0.07em" }}>{label}</span>
+                                                            <span style={{ fontSize: 9, color: "#ABABAB" }}>· {groupMap.get(label).length} job{groupMap.get(label).length !== 1 ? "s" : ""}</span>
+                                                            <div style={{ flex: 1, height: 1, background: "#E8E8E8" }} />
+                                                        </div>
+                                        <div style={{ display: "flex", overflowX: "auto", flexWrap: "nowrap", gap: 5, paddingBottom: 2 }}>
+                                                            {groupMap.get(label).map((job) => {
+                                                                const dimmed = isFilterActive && !jobMatchesFilter(job);
+                                                                return (
+                                                                    <div key={job.id} className="ps-chip" onPointerDown={(e) => onPoolPointerDown(e, job)} onClick={() => setSelectedJobId(job.id)}
+                                                                        style={{ ...styles.chip, borderLeft: `3px solid ${job.isRunning ? RUNNING_GREEN : PRODUCTS[job.product]}`, background: job.isRunning ? "#E3F5E9" : "#FFFFFF", boxShadow: selectedJobId === job.id ? `0 0 0 2px ${PRODUCTS[job.product]}55` : "0 1px 3px rgba(27,110,140,0.07)", opacity: dimmed ? 0.28 : 1, filter: dimmed ? "grayscale(0.4)" : "none" }}>
+                                                                        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: "#262626", lineHeight: 1.3, whiteSpace: "nowrap" }}>{job.name}</div>
+                                                                        <div style={{ fontSize: 10, color: "#6E6E6E", whiteSpace: "nowrap" }}>{job.duration}h</div>
+                                                                        {job.isRunning && <div style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9, fontWeight: 800, color: RUNNING_GREEN_DARK, marginTop: 1 }}><span className="ps-running-dot" style={{ width: 4, height: 4, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 }} />RUNNING</div>}
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             </div>
+                            </div>{/* end flex column wrapper: scrollArea + pool */}
                         </>
                     )}
 
@@ -3924,243 +4620,281 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                         )}
 
                                         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-                                            <label style={{ fontSize: 11.5, color: "#6E6E6E", flexShrink: 0 }}>Filter by job</label>
+                                            {/* Machine filter */}
+                                            <label style={{ fontSize: 11.5, color: "#6E6E6E", flexShrink: 0 }}>Machine</label>
                                             <select
                                                 className="ps-select"
-                                                style={{ width: "auto", minWidth: 220 }}
+                                                style={{ width: "auto", minWidth: 150 }}
+                                                value={toolsMachineFilter}
+                                                onChange={(e) => { setToolsMachineFilter(e.target.value); setSelectedToolKey(null); }}
+                                            >
+                                                <option value="all">All machines</option>
+                                                {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                            </select>
+                                            {/* Job filter */}
+                                            <label style={{ fontSize: 11.5, color: "#6E6E6E", flexShrink: 0 }}>Job</label>
+                                            <select
+                                                className="ps-select"
+                                                style={{ width: "auto", minWidth: 180 }}
                                                 value={toolsJobFilter}
-                                                onChange={(e) => {
-                                                    setToolsJobFilter(e.target.value);
-                                                    setSelectedToolKey(null);
-                                                }}
+                                                onChange={(e) => { setToolsJobFilter(e.target.value); setSelectedToolKey(null); }}
                                             >
                                                 <option value="all">All jobs ({toolSummary.length} tools)</option>
                                                 {toolsJobOptions.map((j) => (
                                                     <option key={j.id} value={j.id}>{j.name} ({(j.tools || []).length} tools)</option>
                                                 ))}
                                             </select>
-                                            {toolsJobFilter !== "all" && (
+                                            {(toolsMachineFilter !== "all" || toolsJobFilter !== "all") && (
                                                 <button
                                                     className="ps-zoombtn"
-                                                    style={{ ...styles.zoomBtn, width: "auto", padding: "0 10px" }}
-                                                    onClick={() => {
-                                                        setToolsJobFilter("all");
-                                                        setSelectedToolKey(null);
-                                                    }}
+                                                    style={{ ...styles.zoomBtn, width: "auto", padding: "0 10px", display: "flex", alignItems: "center", gap: 4 }}
+                                                    onClick={() => { setToolsMachineFilter("all"); setToolsJobFilter("all"); setSelectedToolKey(null); }}
                                                 >
-                                                    clear filter
+                                                    <X size={11} /> clear
                                                 </button>
                                             )}
+                                            {nearLimitAlerts.length > 0 && (
+                                                <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: ALARM_RED_DARK, background: "#FDECEB", border: "1px solid #F7CFCB", borderRadius: 10, padding: "2px 8px", fontWeight: 600 }}>
+                                                    <AlertOctagon size={11} color={ALARM_RED_DARK} />
+                                                    {nearLimitAlerts.length} near limit
+                                                </span>
+                                            )}
+                                            {/* expand / collapse all */}
+                                            <div style={{ display: "flex", border: "1px solid #D9D9D9", borderRadius: 6, overflow: "hidden" }}>
+                                                <button onClick={() => setExpandedMachines(new Set(toolsByMachine.map((g) => g.id)))} title="Expand all"
+                                                    style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 10px", fontSize: 11.5, fontWeight: 600, background: "#fff", color: "#595959", border: "none", cursor: "pointer" }}>
+                                                    <Maximize2 size={12} /> All
+                                                </button>
+                                                <button onClick={() => setExpandedMachines(new Set())} title="Collapse all"
+                                                    style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 10px", fontSize: 11.5, fontWeight: 600, background: "#fff", color: "#595959", border: "none", borderLeft: "1px solid #D9D9D9", cursor: "pointer" }}>
+                                                    <Minimize2 size={12} /> None
+                                                </button>
+                                            </div>
+                                            {/* view toggle */}
+                                            <div style={{ display: "flex", border: "1px solid #D9D9D9", borderRadius: 6, overflow: "hidden", marginLeft: "auto" }}>
+                                                <button onClick={() => setToolViewMode("list")}
+                                                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", fontSize: 12, fontWeight: 600, background: toolViewMode === "list" ? "#1B6E8C" : "#fff", color: toolViewMode === "list" ? "#fff" : "#595959", border: "none", cursor: "pointer" }}>
+                                                    <Layers size={13} /> List
+                                                </button>
+                                                <button onClick={() => setToolViewMode("grid")}
+                                                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", fontSize: 12, fontWeight: 600, background: toolViewMode === "grid" ? "#1B6E8C" : "#fff", color: toolViewMode === "grid" ? "#fff" : "#595959", border: "none", borderLeft: "1px solid #D9D9D9", cursor: "pointer" }}>
+                                                    <Package size={13} /> Grid
+                                                </button>
+                                            </div>
                                             <button
                                                 className="ps-zoombtn"
-                                                style={{ ...styles.zoomBtn, width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center", marginLeft: "auto" }}
+                                                style={{ ...styles.zoomBtn, width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center" }}
                                                 onClick={exportToolsExcel}
                                                 title="export tool usage as Excel"
                                             >
                                                 <FileSpreadsheet size={13} /> Excel
                                             </button>
+                                            <button
+                                                style={{ display: "flex", alignItems: "center", gap: 5, padding: "0 14px", height: 30, fontSize: 12, fontWeight: 700, background: "#1B6E8C", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}
+                                                onClick={() => { setAddToolForm({ number: "", name: "", maxLife: String(TOOL_LIFE_HOURS), machineId: "" }); setShowAddToolModal(true); }}
+                                            >
+                                                <Plus size={13} /> Add Tool
+                                            </button>
                                         </div>
 
-                                        {visibleToolSummary.length === 0 ? (
-                                            <div style={styles.bottleneckEmpty}>No tools found for this job</div>
-                                        ) : (
-                                        <>
-                                        <div style={styles.toolsLayout}>
-                                            <div style={styles.toolsSidebar} className="ps-scroll">
-                                                {visibleToolSummary.map((t) => {
-                                                    const key = toolKey(t);
-                                                    const active = selectedTool && toolKey(selectedTool) === key;
-                                                    const usedHours = t.actualHours + t.liveHours;
-                                                    const refLife = t.maxLife || TOOL_LIFE_HOURS;
-                                                    const lifePct = Math.min(100, (usedHours / refLife) * 100);
-                                                    const lifeOver = usedHours > refLife;
+                                        {/* ── Grid view ── */}
+                                        {toolViewMode === "grid" && (
+                                            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                                                {/* legend */}
+                                                <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                                                    {[{ color: "#21A366", label: "OK (< 75%)" }, { color: "#E8A33D", label: "Warning (75–99%)" }, { color: "#C4372E", label: "Expired (≥ 100%)" }].map(({ color, label }) => (
+                                                        <div key={label} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#595959" }}>
+                                                            <div style={{ width: 10, height: 10, borderRadius: 2, background: color }} />{label}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                {toolsByMachine.length === 0 && (
+                                                    <div style={{ padding: "24px", textAlign: "center", fontSize: 13, color: "#8C8C8C" }}>No tools match filter</div>
+                                                )}
+                                                {toolsByMachine.map((group) => {
+                                                    const isOpen = expandedMachines.has(group.id);
+                                                    const groupExpired = group.tools.filter((t) => (t.actualHours + t.liveHours) > (t.maxLife || TOOL_LIFE_HOURS)).length;
+                                                    const groupWarn   = group.tools.filter((t) => { const u = t.actualHours + t.liveHours; const l = t.maxLife || TOOL_LIFE_HOURS; return u / l >= 0.75 && u <= l; }).length;
                                                     return (
-                                                        <div
-                                                            key={key}
-                                                            className="ps-tool-sidebar-item"
-                                                            onClick={() => setSelectedToolKey(key)}
-                                                            style={{
-                                                                ...styles.toolsSidebarItem,
-                                                                background: active ? "#E3F0FB" : "transparent",
-                                                                borderLeft: active ? `3px solid ${DONE_BLUE}` : "3px solid transparent",
-                                                            }}
-                                                        >
-                                                            <Wrench size={13} color={active ? DONE_BLUE : "#6E6E6E"} style={{ flexShrink: 0 }} />
-                                                            <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, gap: 3 }}>
-                                                                <span style={{ ...styles.toolsSidebarName, color: active ? "#262626" : "#404040" }}>
-                                                                    {t.number ? `T${t.number} · ` : ""}{t.name}
-                                                                </span>
-                                                                <span style={styles.toolsSidebarSub}>{t.jobs.length} job{t.jobs.length !== 1 ? "s" : ""}</span>
-                                                                <div style={{ height: 4, background: "#E1E1E1", borderRadius: 3, overflow: "hidden" }}>
-                                                                    <div style={{ height: "100%", width: `${lifePct}%`, borderRadius: 3, background: lifeOver ? "#F0625B" : lifePct > 75 ? "#E8A33D" : "#21A366" }} />
-                                                                </div>
+                                                        <div key={group.id} style={{ border: "1px solid #E2E8F0", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+                                                            {/* accordion header */}
+                                                            <div
+                                                                onClick={() => setExpandedMachines((prev) => { const next = new Set(prev); next.has(group.id) ? next.delete(group.id) : next.add(group.id); return next; })}
+                                                                style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", cursor: "pointer", background: "#F4F7FA", borderBottom: isOpen ? "1px solid #E2E8F0" : "none", userSelect: "none" }}
+                                                            >
+                                                                <Cpu size={14} color="#1B6E8C" style={{ flexShrink: 0 }} />
+                                                                <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: "#1B3A4B" }}>{group.name}</span>
+                                                                <span style={{ fontSize: 11, color: "#6E6E6E" }}>{group.tools.length} tools</span>
+                                                                {groupExpired > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: "#C4372E", borderRadius: 8, padding: "1px 7px" }}>{groupExpired} expired</span>}
+                                                                {groupWarn > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: "#E8A33D", borderRadius: 8, padding: "1px 7px" }}>{groupWarn} warn</span>}
+                                                                <ChevronDown size={14} color="#6E6E6E" style={{ flexShrink: 0, transition: "transform 0.2s", transform: isOpen ? "rotate(180deg)" : "none" }} />
                                                             </div>
-                                                            {t.liveHours > 0 && <span className="ps-running-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: RUNNING_GREEN, flexShrink: 0 }} />}
-                                                            <span style={{ ...styles.toolsSidebarHours, color: lifeOver ? "#C4372E" : "#262626" }}>{usedHours.toFixed(1)}h</span>
+                                                            {/* mini vertical-bar cards */}
+                                                            {isOpen && (
+                                                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(74px, 1fr))", gap: 8, padding: 12 }}>
+                                                                    {group.tools.map((t) => {
+                                                                        const key = toolKey(t);
+                                                                        const usedH = t.actualHours + t.liveHours;
+                                                                        const refLife = t.maxLife || TOOL_LIFE_HOURS;
+                                                                        const lifePct = Math.min(110, (usedH / refLife) * 100);
+                                                                        const expired = lifePct >= 100;
+                                                                        const warning = lifePct >= 75 && !expired;
+                                                                        const barColor = expired ? "#C4372E" : warning ? "#E8A33D" : "#21A366";
+                                                                        return (
+                                                                            <div key={key}
+                                                                                onClick={() => setSelectedToolKey(key)}
+                                                                                title={`${t.number ? `T${t.number} · ` : ""}${t.name}\n${lifePct.toFixed(0)}% · ${usedH.toFixed(2)}h / ${refLife}h`}
+                                                                                style={{ background: "#FAFAFA", border: `2px solid ${expired ? "#F7CFCB" : warning ? "#F3DDAE" : "#E8E8E8"}`, borderRadius: 6, padding: "6px 5px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, position: "relative", overflow: "hidden", cursor: "pointer" }}
+                                                                            >
+                                                                                {expired && <div style={{ position: "absolute", inset: 0, backgroundImage: "repeating-linear-gradient(135deg,transparent,transparent 5px,#C4372E18 5px,#C4372E18 10px)", pointerEvents: "none" }} />}
+                                                                                <div style={{ fontSize: 9.5, fontWeight: 700, color: "#6E6E6E", fontFamily: "'IBM Plex Mono',monospace", lineHeight: 1 }}>{t.number ? `T${t.number}` : "—"}</div>
+                                                                                <div style={{ width: 22, height: 52, background: "#E8E8E8", borderRadius: 3, overflow: "hidden", position: "relative", flexShrink: 0 }}>
+                                                                                    <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: `${Math.min(100, lifePct)}%`, background: barColor, borderRadius: 3, transition: "height 0.3s" }} />
+                                                                                    {expired && <div style={{ position: "absolute", inset: 0, backgroundImage: "repeating-linear-gradient(135deg,transparent,transparent 4px,rgba(255,255,255,0.35) 4px,rgba(255,255,255,0.35) 8px)" }} />}
+                                                                                    <div style={{ position: "absolute", top: "50%", left: 0, right: 0, transform: "translateY(-50%)", textAlign: "center", fontSize: 8.5, fontWeight: 700, color: lifePct > 40 ? "#fff" : barColor, textShadow: lifePct > 40 ? "0 1px 2px rgba(0,0,0,0.3)" : "none" }}>{lifePct.toFixed(0)}%</div>
+                                                                                </div>
+                                                                                <div style={{ fontSize: 8.5, color: "#404040", fontWeight: 500, textAlign: "center", lineHeight: 1.2, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>{t.name.length > 8 ? t.name.slice(0, 8) + "…" : t.name}</div>
+                                                                                {(expired || warning) && <div style={{ fontSize: 8, fontWeight: 700, color: "#fff", background: barColor, borderRadius: 3, padding: "1px 4px", lineHeight: 1.4 }}>{expired ? "EXPIRED" : "WARN"}</div>}
+                                                                                {t.liveHours > 0 && <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "#21A366" }} />}
+                                                                            </div>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     );
                                                 })}
                                             </div>
+                                        )}
 
-                                            <div style={styles.toolsRightCol}>
-                                            <div style={styles.toolsDetail}>
-                                                {selectedTool ? (
-                                                    (() => {
-                                                        const t = selectedTool;
-                                                        const usedHours = t.actualHours + t.liveHours;
-                                                        const pct = t.estHours > 0 ? Math.min(100, (usedHours / t.estHours) * 100) : 0;
-                                                        const overEstimate = t.estHours > 0 && usedHours > t.estHours;
-                                                        const refLife = t.maxLife || TOOL_LIFE_HOURS;
-                                                        const lifePct = Math.min(100, (usedHours / refLife) * 100);
-                                                        const lifeOver = usedHours > refLife;
-                                                        return (
-                                                            <>
-                                                                <div style={styles.qrCardHeader}>
-                                                                    <Wrench size={16} color="#1B6E8C" />
-                                                                    <span style={{ ...styles.qrJobName, fontSize: 15 }}>{t.number ? `T${t.number} · ` : ""}{t.name}</span>
-                                                                    {t.liveHours > 0 && (
-                                                                        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: RUNNING_GREEN }}>
-                                                                            <span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: RUNNING_GREEN }} />
-                                                                            Running now
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-
-                                                                <div style={styles.analyticsStatsRow}>
-                                                                    <div style={styles.analyticsStat}>
-                                                                        <span style={styles.analyticsStatValue}>{t.estHours.toFixed(1)}h</span>
-                                                                        <span style={styles.analyticsStatLabel}>Estimated</span>
-                                                                    </div>
-                                                                    <div style={styles.analyticsStat}>
-                                                                        <span style={{ ...styles.analyticsStatValue, color: overEstimate ? "#C4372E" : "#262626" }}>{usedHours.toFixed(1)}h</span>
-                                                                        <span style={styles.analyticsStatLabel}>Actual used</span>
-                                                                    </div>
-                                                                    <div style={styles.analyticsStat}>
-                                                                        <span style={styles.analyticsStatValue}>{t.jobs.length}</span>
-                                                                        <span style={styles.analyticsStatLabel}>Active jobs</span>
-                                                                    </div>
-                                                                </div>
-
-                                                                <div style={styles.toolsBarsGrid}>
-                                                                    <div>
-                                                                        <label style={styles.fieldLabel}>vs estimate</label>
-                                                                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-                                                                            <div style={{ flex: 1, height: 8, background: "#E1E1E1", borderRadius: 2, overflow: "hidden" }}>
-                                                                                <div
-                                                                                    style={{
-                                                                                        height: "100%",
-                                                                                        width: `${pct}%`,
-                                                                                        borderRadius: 2,
-                                                                                        background: overEstimate ? "#F0625B" : t.liveHours > 0 ? RUNNING_GREEN : "#21A366",
-                                                                                    }}
-                                                                                />
+                                        {toolViewMode === "list" && (
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                                            {toolsByMachine.length === 0 && (
+                                                <div style={{ padding: "24px", textAlign: "center", fontSize: 13, color: "#8C8C8C" }}>No tools match filter</div>
+                                            )}
+                                            {toolsByMachine.map((group) => {
+                                                const isOpen = expandedMachines.has(group.id);
+                                                const groupExpired = group.tools.filter((t) => (t.actualHours + t.liveHours) > (t.maxLife || TOOL_LIFE_HOURS)).length;
+                                                const groupWarn   = group.tools.filter((t) => { const u = t.actualHours + t.liveHours; const l = t.maxLife || TOOL_LIFE_HOURS; return u / l >= 0.75 && u <= l; }).length;
+                                                return (
+                                                    <div key={group.id} style={{ border: "1px solid #E2E8F0", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+                                                        {/* ── accordion header ── */}
+                                                        <div
+                                                            onClick={() => setExpandedMachines((prev) => {
+                                                                const next = new Set(prev);
+                                                                next.has(group.id) ? next.delete(group.id) : next.add(group.id);
+                                                                return next;
+                                                            })}
+                                                            style={{
+                                                                display: "flex", alignItems: "center", gap: 8,
+                                                                padding: "10px 14px", cursor: "pointer",
+                                                                background: "#F4F7FA", borderBottom: isOpen ? "1px solid #E2E8F0" : "none",
+                                                                userSelect: "none",
+                                                            }}
+                                                        >
+                                                            <Cpu size={14} color="#1B6E8C" style={{ flexShrink: 0 }} />
+                                                            <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: "#1B3A4B" }}>{group.name}</span>
+                                                            <span style={{ fontSize: 11, color: "#6E6E6E" }}>{group.tools.length} tools</span>
+                                                            {groupExpired > 0 && (
+                                                                <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: "#C4372E", borderRadius: 8, padding: "1px 7px" }}>{groupExpired} expired</span>
+                                                            )}
+                                                            {groupWarn > 0 && (
+                                                                <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: "#E8A33D", borderRadius: 8, padding: "1px 7px" }}>{groupWarn} warn</span>
+                                                            )}
+                                                            <ChevronDown size={14} color="#6E6E6E" style={{ flexShrink: 0, transition: "transform 0.2s", transform: isOpen ? "rotate(180deg)" : "none" }} />
+                                                        </div>
+                                                        {/* ── tool cards grid ── */}
+                                                        {isOpen && (
+                                                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10, padding: 14 }}>
+                                                                {group.tools.map((t) => {
+                                                                    const key = toolKey(t);
+                                                                    const usedH  = t.actualHours + t.liveHours;
+                                                                    const refLife = t.maxLife || TOOL_LIFE_HOURS;
+                                                                    const lifePct = Math.min(110, (usedH / refLife) * 100);
+                                                                    const expired = lifePct >= 100;
+                                                                    const warning = lifePct >= 75 && !expired;
+                                                                    const barColor = expired ? "#C4372E" : warning ? "#E8A33D" : "#21A366";
+                                                                    const bgColor  = expired ? "#FEF2F2" : warning ? "#FFFBEB" : "#F6FEF9";
+                                                                    const borderColor = expired ? "#FECACA" : warning ? "#FDE68A" : "#BBF7D0";
+                                                                    return (
+                                                                        <div key={key} onClick={() => setSelectedToolKey(key)} style={{ cursor: "pointer",
+                                                                            background: bgColor,
+                                                                            border: `1px solid ${borderColor}`,
+                                                                            borderRadius: 8,
+                                                                            padding: "12px 14px",
+                                                                            display: "flex", flexDirection: "column", gap: 6,
+                                                                            position: "relative", overflow: "hidden",
+                                                                        }}>
+                                                                            {expired && (
+                                                                                <div style={{ position: "absolute", inset: 0, backgroundImage: "repeating-linear-gradient(135deg,transparent,transparent 6px,rgba(196,55,46,0.06) 6px,rgba(196,55,46,0.06) 12px)", pointerEvents: "none" }} />
+                                                                            )}
+                                                                            {/* tool name + number */}
+                                                                            <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                                                                                {t.number && (
+                                                                                    <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'IBM Plex Mono',monospace", color: "#6E6E6E", background: "#E8E8E8", borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>T{t.number}</span>
+                                                                                )}
+                                                                                {t.liveHours > 0 && <span className="ps-running-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: "#21A366", flexShrink: 0 }} />}
                                                                             </div>
-                                                                            <span style={{ fontSize: 11, color: "#6E6E6E", flexShrink: 0 }}>{pct.toFixed(0)}%</span>
-                                                                        </div>
-                                                                    </div>
-                                                                    <div>
-                                                                        <label style={styles.fieldLabel}>tool life (max {refLife.toFixed(1)}h)</label>
-                                                                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-                                                                            <div style={{ flex: 1, height: 8, background: "#E1E1E1", borderRadius: 2, overflow: "hidden" }}>
-                                                                                <div style={{ height: "100%", width: `${lifePct}%`, borderRadius: 2, background: lifeOver ? "#F0625B" : lifePct > 75 ? "#E8A33D" : "#21A366" }} />
+                                                                            <div style={{ fontSize: 12, fontWeight: 600, color: "#1B3A4B", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.name}>{t.name}</div>
+                                                                            {/* life bar */}
+                                                                            <div>
+                                                                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#6E6E6E", marginBottom: 3 }}>
+                                                                                    <span>{usedH.toFixed(1)}h / {refLife.toFixed(0)}h</span>
+                                                                                    <span style={{ fontWeight: 700, color: barColor }}>{lifePct.toFixed(0)}%</span>
+                                                                                </div>
+                                                                                <div style={{ height: 6, background: "#E1E1E1", borderRadius: 3, overflow: "hidden" }}>
+                                                                                    <div style={{ height: "100%", width: `${Math.min(100, lifePct)}%`, background: barColor, borderRadius: 3, transition: "width 0.3s" }} />
+                                                                                </div>
                                                                             </div>
-                                                                            <span style={{ fontSize: 11, color: lifeOver ? "#C4372E" : "#6E6E6E", fontWeight: lifeOver ? 700 : 400, flexShrink: 0, whiteSpace: "nowrap" }}>
-                                                                                {lifePct.toFixed(0)}%{lifeOver ? " — replace" : ""}
-                                                                            </span>
+                                                                            {/* status badge */}
+                                                                            <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                                                                                <span style={{ fontSize: 10, fontWeight: 700, color: expired ? "#C4372E" : warning ? "#B45309" : "#15803D", background: expired ? "#FEE2E2" : warning ? "#FEF3C7" : "#DCFCE7", borderRadius: 10, padding: "2px 7px" }}>
+                                                                                    {expired ? "EXPIRED" : warning ? "WARNING" : "OK"}
+                                                                                </span>
+                                                                                <span style={{ fontSize: 10, color: "#6E6E6E" }}>{t.jobs.length} job{t.jobs.length !== 1 ? "s" : ""}</span>
+                                                                            </div>
                                                                         </div>
-                                                                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                                                                            <label style={{ ...styles.fieldLabel, marginBottom: 0, flexShrink: 0 }}>Set max life (h):</label>
-                                                                            <input
-                                                                                type="number" min="0.1" step="0.5"
-                                                                                defaultValue={t.maxLife || TOOL_LIFE_HOURS}
-                                                                                key={toolKey(t)}
-                                                                                style={{ width: 72, fontSize: 12, padding: "3px 6px", border: "1px solid #C8C8C8", borderRadius: 4, background: "#FAFAFA" }}
-                                                                                onBlur={(e) => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) updateToolMaxLife(t, val); }}
-                                                                                onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                                                                            />
-                                                                            <span style={{ fontSize: 11, color: "#8C8C8C" }}>hours</span>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                        )}
 
-                                                                <label style={styles.fieldLabel}>jobs using this tool</label>
-                                                                <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 4 }}>
-                                                                    {t.jobs.map((j, i) => (
-                                                                        <div
-                                                                            key={j.id + i}
-                                                                            style={styles.toolRow}
-                                                                            onClick={() => {
-                                                                                setActiveNav("schedule");
-                                                                                const found = jobs.find((jj) => jj.id === j.id);
-                                                                                if (found) jumpToJob(found);
-                                                                            }}
-                                                                        >
-                                                                            <span style={{ ...styles.legendDot, background: PRODUCTS[jobs.find((jj) => jj.id === j.id)?.product] || "#6E6E6E" }} />
-                                                                            <span style={styles.toolRowName}>{j.name}</span>
-                                                                            <span style={styles.toolRowHours}>
-                                                                                {(j.actualHours + j.liveHours) >= 0.1 ? `${(j.actualHours + j.liveHours).toFixed(1)}h` : "<0.1h"} / {j.estHours.toFixed(1)}h
-                                                                            </span>
-                                                                        </div>
-                                                                    ))}
-                                                                    {t.jobs.length === 0 && t.historicalJobNames.length > 0 && (
-                                                                        <div style={{ fontSize: 10.5, color: "#6E6E6E", padding: "4px 8px" }}>
-                                                                            Previously used in (deleted): {t.historicalJobNames.join(", ")}
-                                                                        </div>
-                                                                    )}
-                                                                    {t.jobs.length === 0 && t.historicalJobNames.length === 0 && (
-                                                                        <div style={{ fontSize: 10.5, color: "#6E6E6E", padding: "4px 8px" }}>No jobs currently use this tool</div>
-                                                                    )}
-                                                                </div>
-                                                            </>
-                                                        );
-                                                    })()
-                                                ) : (
-                                                    <div style={styles.bottleneckEmpty}>Select a tool on the left to see details</div>
-                                                )}
-                                            </div>
-
-                                            <div style={styles.analyticsCard}>
-                                                <div style={styles.analyticsCardHeader}>
-                                                    <BarChart3 size={15} color="#4FA8C9" />
-                                                    <span style={styles.analyticsCardTitle}>Top tools by actual usage</span>
-                                                </div>
-                                                <div style={styles.barChartWrap} className="ps-scroll">
+                                        {/* ── Top tools by usage bar chart ── */}
+                                        {topToolsByUsage.length > 0 && (
+                                            <div style={{ marginTop: 20, background: "#fff", border: "1px solid #E2E8F0", borderRadius: 8, padding: "16px 18px" }}>
+                                                <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 14 }}>Top tools by usage hours</div>
+                                                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                                                     {(() => {
-                                                        const maxHours = Math.max(0.1, ...topToolsByUsage.map((t) => t.usedHours));
-                                                        return topToolsByUsage.map((t) => {
-                                                            const key = toolKey(t);
-                                                            const heightPct = Math.max(2, (t.usedHours / maxHours) * 100);
-                                                            const over = t.usedHours > (t.maxLife || TOOL_LIFE_HOURS);
-                                                            const active = selectedTool && toolKey(selectedTool) === key;
+                                                        const maxH = Math.max(0.1, ...topToolsByUsage.map((t) => t.usedHours));
+                                                        return topToolsByUsage.map((t, i) => {
+                                                            const pct = (t.usedHours / maxH) * 100;
+                                                            const refLife = t.maxLife || TOOL_LIFE_HOURS;
+                                                            const lifePct = (t.usedHours / refLife) * 100;
+                                                            const barColor = lifePct >= 100 ? "#C4372E" : lifePct >= 75 ? "#E8A33D" : "#1B6E8C";
                                                             return (
-                                                                <div
-                                                                    key={key}
-                                                                    style={styles.barChartCol}
-                                                                    onClick={() => setSelectedToolKey(key)}
-                                                                    title={`${t.number ? `T${t.number} · ` : ""}${t.name}: ${t.usedHours.toFixed(1)}h`}
-                                                                >
-                                                                    <span style={styles.barChartValue}>{t.usedHours.toFixed(1)}h</span>
-                                                                    <div style={styles.barChartTrack}>
-                                                                        <div
-                                                                            style={{
-                                                                                ...styles.barChartFill,
-                                                                                height: `${heightPct}%`,
-                                                                                background: over ? "#F0625B" : "#4FA8C9",
-                                                                                boxShadow: active ? `0 0 0 2px ${DONE_BLUE}55` : "none",
-                                                                            }}
-                                                                        />
+                                                                <div key={toolKey(t)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
+                                                                    onClick={() => setSelectedToolKey(toolKey(t))}>
+                                                                    <span style={{ fontSize: 10.5, fontFamily: "'IBM Plex Mono',monospace", color: "#6E6E6E", width: 24, textAlign: "right", flexShrink: 0 }}>#{i + 1}</span>
+                                                                    <span style={{ fontSize: 11.5, color: "#262626", width: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 0 }}>
+                                                                        {t.number ? `T${t.number} · ` : ""}{t.name}
+                                                                    </span>
+                                                                    <div style={{ flex: 1, height: 14, background: "#F0F0F0", borderRadius: 3, overflow: "hidden" }}>
+                                                                        <div style={{ height: "100%", width: `${pct}%`, background: barColor, borderRadius: 3, transition: "width 0.4s" }} />
                                                                     </div>
-                                                                    <span style={styles.barChartLabel}>{t.number ? `T${t.number}` : t.name.slice(0, 6)}</span>
+                                                                    <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: barColor, fontWeight: 600, width: 48, textAlign: "right", flexShrink: 0 }}>
+                                                                        {t.usedHours.toFixed(1)}h
+                                                                    </span>
                                                                 </div>
                                                             );
                                                         });
                                                     })()}
-                                                    {topToolsByUsage.length === 0 && <div style={styles.bottleneckEmpty}>No usage data yet</div>}
                                                 </div>
                                             </div>
-                                            </div>
-                                        </div>
-                                        </>
                                         )}
                                     </>
                                 )}
@@ -4172,47 +4906,11 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                         <div className="ps-scroll" style={styles.analyticsWrap}>
                             <div style={{ maxWidth: 1100, margin: "0 auto" }}>
 
-                                {/* ── STEP 1: Machine bind QR ─────────────────────────────── */}
-                                <div style={{ ...styles.qrIntro, background: "#EFF6FF", borderColor: "#BFDBFE" }}>
-                                    <Cpu size={16} color="#1D4ED8" />
-                                    <span style={{ color: "#1D4ED8" }}>
-                                        <b>Step 1</b> — Scan machine QR to lock which machine you are working on, then scan the job QR
-                                    </span>
-                                </div>
-                                <div style={styles.qrGrid}>
-                                    {resources.map((r) => {
-                                        const origin = typeof window !== "undefined" ? window.location.origin : "";
-                                        const bindUrl = `${origin}/?bind=resource&resource=${r.id}`;
-                                        const bindImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(bindUrl)}`;
-                                        const meta = STATUS_META[r.status];
-                                        return (
-                                            <div key={r.id} style={{ ...styles.qrCard, borderColor: "#BFDBFE" }}>
-                                                <div style={styles.qrCardHeader}>
-                                                    <meta.Icon size={13} color="#1D4ED8" />
-                                                    <span style={styles.qrJobName}>{r.name}</span>
-                                                </div>
-                                                <div style={styles.qrResourceName}>{r.type}</div>
-                                                <div style={styles.qrImages}>
-                                                    <div style={styles.qrImageBlock}>
-                                                        <img src={bindImg} alt={`bind ${r.name}`} style={styles.qrImage} />
-                                                        <div style={{ ...styles.qrLabel, color: "#1D4ED8" }}>
-                                                            <Cpu size={11} /> BIND
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                    {resources.length === 0 && (
-                                        <div style={styles.bottleneckEmpty}>No machines in system</div>
-                                    )}
-                                </div>
-
-                                {/* ── STEP 2: Job QR ──────────────────────────────────────── */}
-                                <div style={{ ...styles.qrIntro, marginTop: 24 }}>
+                                {/* ── Job QR ──────────────────────────────────────── */}
+                                <div style={{ ...styles.qrIntro, marginTop: 0 }}>
                                     <QrCode size={16} color="#1B6E8C" />
                                     <span>
-                                        <b>Step 2</b> — Scan START to begin / STOP to finish — system will verify job matches selected machine
+                                        Scan <b>START</b> to begin / <b>STOP</b> to finish — machine is matched automatically from your user account
                                     </span>
                                 </div>
                                 <div style={styles.qrGrid}>
@@ -4652,6 +5350,387 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                     )}
 
 
+                    {activeNav === "users" && (() => {
+                        const now = Date.now();
+                        const dateThresholds = { today: 86400000, week: 7*86400000, month: 30*86400000 };
+                        const uFiltered = users.filter((u) => {
+                            const q = userSearch.toLowerCase();
+                            const matchQ = !q || u.username.toLowerCase().includes(q);
+                            const matchRole = userFilterRole === "all" || u.role === userFilterRole;
+                            const matchDate = userFilterDate === "all" || (u.lastLoginAt && (now - new Date(u.lastLoginAt).getTime()) <= dateThresholds[userFilterDate]);
+                            return matchQ && matchRole && matchDate;
+                        }).slice().sort((a, b) => {
+                            const dir = userSort.dir === "asc" ? 1 : -1;
+                            if (userSort.col === "username") return dir * a.username.localeCompare(b.username);
+                            if (userSort.col === "role")     return dir * a.role.localeCompare(b.role);
+                            if (userSort.col === "lastLogin") return dir * ((a.lastLoginAt || "").localeCompare(b.lastLoginAt || ""));
+                            if (userSort.col === "joined")   return dir * ((a.createdAt || "").localeCompare(b.createdAt || ""));
+                            return 0;
+                        });
+                        const uTotalPages = Math.max(1, Math.ceil(uFiltered.length / userRowsPerPage));
+                        const uPage = Math.min(userPage, uTotalPages);
+                        const uPageUsers = uFiltered.slice((uPage - 1) * userRowsPerPage, uPage * userRowsPerPage);
+                        function toggleSort(col) {
+                            setUserSort((s) => s.col === col ? { col, dir: s.dir === "asc" ? "desc" : "asc" } : { col, dir: "asc" });
+                            setUserPage(1);
+                        }
+                        function SortIcon({ col }) {
+                            if (userSort.col !== col) return null;
+                            return <span style={{ fontSize: 11, color: "#6E6E6E", marginLeft: 2 }}>{userSort.dir === "asc" ? "↑" : "↓"}</span>;
+                        }
+                        const hasFilter = userSearch || userFilterRole !== "all" || userFilterDate !== "all";
+                        return (
+                        <div className="ps-scroll" style={styles.analyticsWrap}>
+                            <div style={{ maxWidth: 900, margin: "0 auto" }}>
+
+                                {/* ── page header ── */}
+                                <div style={{ marginBottom: 24 }}>
+                                    <div style={{ fontSize: 22, fontWeight: 700, color: "#111827", marginBottom: 4 }}>User management</div>
+                                    <div style={{ fontSize: 13.5, color: "#6B7280" }}>Manage your team members and their account permissions here.</div>
+                                </div>
+
+                                {/* ── add/edit form ── */}
+                                {userFormMode && isAdmin && (
+                                    <div style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: "20px 24px", marginBottom: 20 }}>
+                                        <div style={{ fontWeight: 700, fontSize: 14, color: "#111827", marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+                                            {userFormMode === "add" ? <><UserPlus size={15} color="#6366F1" /> Add new user</> : <><KeyRound size={15} color="#6366F1" /> Edit · {userFormUsername}</>}
+                                        </div>
+
+                                        {/* avatar upload */}
+                                        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
+                                            <div style={{ position: "relative", flexShrink: 0 }}>
+                                                {userFormAvatar ? (
+                                                    <img src={userFormAvatar} alt="avatar" style={{ width: 64, height: 64, borderRadius: "50%", objectFit: "cover", border: "2px solid #E5E7EB" }} />
+                                                ) : (
+                                                    <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#E5E7EB", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 700, color: "#9CA3AF" }}>
+                                                        {userFormUsername ? userFormUsername.charAt(0).toUpperCase() : "?"}
+                                                    </div>
+                                                )}
+                                                {userFormAvatar && (
+                                                    <button onClick={() => setUserFormAvatar("")}
+                                                        style={{ position: "absolute", top: -4, right: -4, width: 18, height: 18, borderRadius: "50%", background: "#DC2626", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                                        <X size={10} color="#fff" />
+                                                    </button>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Profile photo</div>
+                                                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #D1D5DB", borderRadius: 6, padding: "6px 12px", fontSize: 12.5, color: "#374151", cursor: "pointer", fontFamily: "'Segoe UI', sans-serif" }}>
+                                                    <Upload size={13} color="#6B7280" /> Upload photo
+                                                    <input type="file" accept="image/*" style={{ display: "none" }}
+                                                        onChange={(e) => {
+                                                            const file = e.target.files?.[0];
+                                                            if (!file) return;
+                                                            if (file.size > 2 * 1024 * 1024) { setUserFormError("Image must be under 2MB"); return; }
+                                                            const reader = new FileReader();
+                                                            reader.onload = (ev) => setUserFormAvatar(ev.target.result);
+                                                            reader.readAsDataURL(file);
+                                                            e.target.value = "";
+                                                        }}
+                                                    />
+                                                </label>
+                                                <div style={{ fontSize: 11.5, color: "#9CA3AF", marginTop: 4 }}>JPG, PNG, GIF · max 2MB</div>
+                                            </div>
+                                        </div>
+
+                                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                                            <div>
+                                                <label style={{ ...styles.fieldLabel, color: "#374151" }}>Username</label>
+                                                <input className="ps-input" value={userFormUsername} placeholder="e.g. john.doe"
+                                                    disabled={userFormMode !== "add"} style={{ opacity: userFormMode !== "add" ? 0.6 : 1 }}
+                                                    onChange={(e) => { setUserFormUsername(e.target.value); setUserFormError(""); }} />
+                                            </div>
+                                            <div>
+                                                <label style={{ ...styles.fieldLabel, color: "#374151" }}>Email</label>
+                                                <input className="ps-input" type="email" value={userFormEmail} placeholder="john@example.com"
+                                                    onChange={(e) => { setUserFormEmail(e.target.value); setUserFormError(""); }} />
+                                            </div>
+                                        </div>
+                                        <div style={{ marginBottom: 12 }}>
+                                            <label style={{ ...styles.fieldLabel, color: "#374151" }}>{userFormMode === "add" ? "Password" : "New password (leave blank to keep)"}</label>
+                                            <input className="ps-input" type="password" value={userFormPassword}
+                                                placeholder={userFormMode === "add" ? "min 4 characters" : "leave blank to keep"}
+                                                onChange={(e) => { setUserFormPassword(e.target.value); setUserFormError(""); }} />
+                                        </div>
+                                        <div style={{ marginBottom: 12 }}>
+                                            <label style={{ ...styles.fieldLabel, color: "#374151" }}>Role</label>
+                                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                                {ROLES.map((r) => (
+                                                    <button key={r.id} onClick={() => setUserFormRole(r.id)}
+                                                        style={{ display: "flex", alignItems: "center", gap: 6, background: userFormRole === r.id ? r.color : "#F9FAFB", color: userFormRole === r.id ? "#fff" : "#374151", border: `1px solid ${userFormRole === r.id ? r.color : "#D1D5DB"}`, borderRadius: 6, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                                                        <r.Icon size={13} /> {r.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            <div style={{ fontSize: 12, color: "#6B7280", marginTop: 6 }}>{roleMeta(userFormRole).desc}</div>
+                                        </div>
+                                        {/* Assigned Machine — shown for operator role only */}
+                                        {userFormRole === "operator" && (
+                                            <div style={{ marginBottom: 12 }}>
+                                                <label style={{ ...styles.fieldLabel, color: "#374151" }}>Assigned Machine</label>
+                                                <select className="ps-select" value={userFormMachineId}
+                                                    style={{ width: "100%", borderRadius: 6, fontSize: 13, border: "1px solid #D1D5DB", background: "#fff" }}
+                                                    onChange={(e) => setUserFormMachineId(e.target.value)}>
+                                                    <option value="">— Any machine (no restriction) —</option>
+                                                    {resources.map((r) => (
+                                                        <option key={r.id} value={r.id}>{r.name} {r.type ? `(${r.type})` : ""}</option>
+                                                    ))}
+                                                </select>
+                                                <div style={{ fontSize: 11.5, color: "#6B7280", marginTop: 4 }}>
+                                                    Operator will be warned when scanning jobs on a different machine
+                                                </div>
+                                            </div>
+                                        )}
+                                        {userFormError && <div style={{ fontSize: 12, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "7px 12px", marginBottom: 12 }}>{userFormError}</div>}
+                                        <div style={{ display: "flex", gap: 8 }}>
+                                            <button disabled={userFormSaving}
+                                                style={{ background: "#111827", color: "#fff", border: "none", borderRadius: 6, padding: "9px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", opacity: userFormSaving ? 0.6 : 1 }}
+                                                onClick={async () => {
+                                                    if (userFormMode === "add") { const ok = await addUser(userFormUsername, userFormPassword, userFormRole, userFormEmail, userFormAvatar, userFormMachineId); if (ok) closeUserForm(); }
+                                                    else { updateUserRole(userFormMode.id, userFormRole); updateUserEmail(userFormMode.id, userFormEmail); updateUserAvatar(userFormMode.id, userFormAvatar); updateUserMachine(userFormMode.id, userFormMachineId); if (userFormPassword) { const ok = await updateUserPassword(userFormMode.id, userFormPassword); if (!ok) return; } closeUserForm(); }
+                                                }}>
+                                                {userFormSaving ? "Saving…" : userFormMode === "add" ? "Add user" : "Save changes"}
+                                            </button>
+                                            <button style={{ background: "#fff", color: "#374151", border: "1px solid #D1D5DB", borderRadius: 6, padding: "9px 16px", fontSize: 13, cursor: "pointer" }} onClick={closeUserForm}>Cancel</button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* ── toolbar: All users count + search + filters + add ── */}
+                                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+                                    <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", flex: 1 }}>
+                                        All users <span style={{ color: "#6B7280", fontWeight: 500 }}>{uFiltered.length}</span>
+                                    </div>
+                                    {/* search */}
+                                    <div style={{ position: "relative" }}>
+                                        <Search size={14} color="#9CA3AF" style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+                                        <input className="ps-input" placeholder="Search" value={userSearch}
+                                            style={{ paddingLeft: 32, borderRadius: 8, fontSize: 13, border: "1px solid #D1D5DB", width: 220, background: "#fff" }}
+                                            onChange={(e) => { setUserSearch(e.target.value); setUserPage(1); }} />
+                                    </div>
+                                    {/* filters button */}
+                                    <div style={{ position: "relative", display: "flex", gap: 6 }}>
+                                        <select className="ps-select" value={userFilterRole}
+                                            style={{ borderRadius: 8, fontSize: 13, border: "1px solid #D1D5DB", width: "auto", minWidth: 110, cursor: "pointer", background: "#fff" }}
+                                            onChange={(e) => { setUserFilterRole(e.target.value); setUserPage(1); }}>
+                                            <option value="all">All roles</option>
+                                            {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+                                        </select>
+                                        <select className="ps-select" value={userFilterDate}
+                                            style={{ borderRadius: 8, fontSize: 13, border: "1px solid #D1D5DB", width: "auto", minWidth: 130, cursor: "pointer", background: "#fff" }}
+                                            onChange={(e) => { setUserFilterDate(e.target.value); setUserPage(1); }}>
+                                            <option value="all">Last active: any</option>
+                                            <option value="today">Today</option>
+                                            <option value="week">This week</option>
+                                            <option value="month">This month</option>
+                                        </select>
+                                        {hasFilter && (
+                                            <button style={{ display: "flex", alignItems: "center", gap: 5, background: "#F3F4F6", color: "#374151", border: "1px solid #D1D5DB", borderRadius: 8, padding: "0 12px", fontSize: 12.5, cursor: "pointer", height: 36 }}
+                                                onClick={() => { setUserSearch(""); setUserFilterRole("all"); setUserFilterDate("all"); setUserPage(1); }}>
+                                                <X size={12} /> Clear
+                                            </button>
+                                        )}
+                                    </div>
+                                    {isAdmin && (
+                                        <button style={{ display: "flex", alignItems: "center", gap: 6, background: "#111827", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+                                            onClick={openAddUser}>
+                                            <Plus size={14} /> Add user
+                                        </button>
+                                    )}
+                                </div>
+
+                                {/* ── table ── */}
+                                <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10, overflow: "hidden" }}>
+                                    {/* thead */}
+                                    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 140px", alignItems: "center", padding: "11px 16px", borderBottom: "1px solid #E5E7EB", gap: 8, background: "#F9FAFB" }}>
+                                        {[
+                                            { label: "User name",   col: "username" },
+                                            { label: "Role",        col: "role" },
+                                            { label: "Access",      col: null },
+                                            { label: "Last active", col: "lastLogin" },
+                                            { label: "Date added",  col: "joined" },
+                                            { label: "Actions",     col: null },
+                                        ].map(({ label, col }) => (
+                                            <div key={label + (col||"")}
+                                                style={{ fontSize: 12, fontWeight: 500, color: "#6B7280", display: "flex", alignItems: "center", gap: 2, cursor: col ? "pointer" : "default", userSelect: "none" }}
+                                                onClick={() => col && toggleSort(col)}>
+                                                {label}{col && <SortIcon col={col} />}
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {uPageUsers.length === 0 ? (
+                                        <div style={{ padding: "48px 24px", textAlign: "center", color: "#9CA3AF", fontSize: 13 }}>
+                                            <Users size={32} color="#D1D5DB" style={{ display: "block", margin: "0 auto 12px" }} />
+                                            {users.length === 0 ? "No users yet — add the first admin to get started." : "No users match your filters."}
+                                        </div>
+                                    ) : uPageUsers.map((u, idx) => {
+                                        const rm = roleMeta(u.role);
+                                        const isMe = u.username === sessionStorage.getItem("ps-username");
+                                        const expanded = selectedUserId === u.id;
+                                        const userLog = auditLog.filter((e) => e.actor === u.username).slice().sort((a, b) => b.at - a.at).slice(0, 30);
+                                        const isLast = idx === uPageUsers.length - 1;
+                                        const lastActiveLabel = u.lastLoginAt ? relativeTime(new Date(u.lastLoginAt).getTime()) : "Never";
+                                        const joinedLabel = u.createdAt ? new Date(u.createdAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "—";
+                                        // role badge color map
+                                        const roleBadgeStyle = {
+                                            admin:    { bg: "#EEF2FF", color: "#4338CA", border: "#C7D2FE" },
+                                            operator: { bg: "#F0FDF4", color: "#15803D", border: "#BBF7D0" },
+                                            viewer:   { bg: "#F3F4F6", color: "#374151", border: "#D1D5DB" },
+                                        }[u.role] || { bg: "#F3F4F6", color: "#374151", border: "#D1D5DB" };
+                                        return (
+                                            <React.Fragment key={u.id}>
+                                                <div
+                                                    style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 140px", alignItems: "center", padding: "12px 16px", gap: 8, borderBottom: (isLast && !expanded) ? "none" : "1px solid #F3F4F6", background: expanded ? "#F5F3FF" : "#FFFFFF", cursor: "pointer" }}
+                                                    onClick={() => setSelectedUserId(expanded ? null : u.id)}
+                                                >
+                                                    {/* avatar + name + email */}
+                                                    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                                                        {u.avatar ? (
+                                                            <img src={u.avatar} alt={u.username} style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", flexShrink: 0, border: "2px solid #E5E7EB" }} />
+                                                        ) : (
+                                                            <div style={{ width: 36, height: 36, borderRadius: "50%", background: `linear-gradient(135deg, ${rm.color}CC, ${rm.color}88)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: "#fff", flexShrink: 0, boxShadow: `0 0 0 2px ${rm.color}33` }}>
+                                                                {u.username.charAt(0).toUpperCase()}
+                                                            </div>
+                                                        )}
+                                                        <div style={{ minWidth: 0 }}>
+                                                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                                                <span style={{ fontWeight: 600, fontSize: 13.5, color: "#111827" }}>{u.username}</span>
+                                                                {isMe && <span style={{ fontSize: 9.5, background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 10, padding: "1px 7px", fontWeight: 700 }}>you</span>}
+                                                            </div>
+                                                            <div style={{ fontSize: 12, color: "#9CA3AF", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                                                {u.email || "—"}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* role */}
+                                                    <div>
+                                                        <span style={{ fontSize: 12, fontWeight: 600, background: roleBadgeStyle.bg, color: roleBadgeStyle.color, border: `1px solid ${roleBadgeStyle.border}`, borderRadius: 6, padding: "3px 9px", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: roleBadgeStyle.color, flexShrink: 0 }} />
+                                                            {rm.label}
+                                                        </span>
+                                                    </div>
+
+                                                    {/* access badges */}
+                                                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                                                        {u.role === "admin" && (
+                                                            <span style={{ fontSize: 11.5, fontWeight: 600, background: "#ECFDF5", color: "#065F46", border: "1px solid #A7F3D0", borderRadius: 6, padding: "3px 9px" }}>Full Access</span>
+                                                        )}
+                                                        {u.role === "operator" && (
+                                                            <span style={{ fontSize: 11.5, fontWeight: 600, background: "#FFF7ED", color: "#9A3412", border: "1px solid #FED7AA", borderRadius: 6, padding: "3px 9px" }}>Schedule</span>
+                                                        )}
+                                                        {u.role === "operator" && u.machineId && (() => {
+                                                            const m = resources.find((r) => r.id === u.machineId);
+                                                            return m ? (
+                                                                <span style={{ fontSize: 11.5, fontWeight: 600, background: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE", borderRadius: 6, padding: "3px 9px", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                                                    <Cpu size={10} />{m.name}
+                                                                </span>
+                                                            ) : null;
+                                                        })()}
+                                                        {u.role === "viewer" && (
+                                                            <span style={{ fontSize: 11.5, fontWeight: 600, background: "#F3F4F6", color: "#6B7280", border: "1px solid #D1D5DB", borderRadius: 6, padding: "3px 9px" }}>View only</span>
+                                                        )}
+                                                    </div>
+
+                                                    {/* last active */}
+                                                    <div style={{ fontSize: 13, color: u.lastLoginAt ? "#374151" : "#9CA3AF" }}>{lastActiveLabel}</div>
+
+                                                    {/* date added */}
+                                                    <div style={{ fontSize: 13, color: "#374151" }}>{joinedLabel}</div>
+
+                                                    {/* actions */}
+                                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+                                                        {isAdmin && (
+                                                            <>
+                                                                <button
+                                                                    style={{ display: "flex", alignItems: "center", gap: 5, background: "#F9FAFB", color: "#374151", border: "1px solid #D1D5DB", borderRadius: 6, padding: "5px 12px", fontSize: 12.5, fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}
+                                                                    onClick={() => openEditUser(u)}
+                                                                >
+                                                                    <KeyRound size={12} color="#6B7280" /> Edit
+                                                                </button>
+                                                                <button
+                                                                    disabled={isMe}
+                                                                    style={{ display: "flex", alignItems: "center", gap: 5, background: isMe ? "#F9FAFB" : "#FEF2F2", color: isMe ? "#D1D5DB" : "#DC2626", border: `1px solid ${isMe ? "#E5E7EB" : "#FECACA"}`, borderRadius: 6, padding: "5px 12px", fontSize: 12.5, fontWeight: 500, cursor: isMe ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}
+                                                                    onClick={() => !isMe && requestConfirm({ title: "Delete user?", message: `"${u.username}" will be permanently removed.`, confirmLabel: "Delete user", danger: true, onConfirm: () => deleteUser(u.id) })}
+                                                                >
+                                                                    <Trash2 size={12} /> Delete
+                                                                </button>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {/* activity log expanded */}
+                                                {expanded && (
+                                                    <div style={{ borderBottom: isLast ? "none" : "1px solid #E5E7EB", background: "#F5F3FF", padding: "12px 20px 14px 60px" }}>
+                                                        <div style={{ fontSize: 11, fontWeight: 700, color: "#4338CA", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>Activity · last 30 actions · {userLog.length} total</div>
+                                                        {userLog.length === 0 ? (
+                                                            <div style={{ fontSize: 12.5, color: "#9CA3AF", padding: "6px 0" }}>No activity recorded yet</div>
+                                                        ) : (
+                                                            <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 220, overflowY: "auto" }}>
+                                                                {userLog.map((entry) => {
+                                                                    const { Icon: AIcon, color: aColor } = actionMeta(entry.action);
+                                                                    return (
+                                                                        <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", borderRadius: 6, background: "#FFFFFF", border: "1px solid #EDE9FE" }}>
+                                                                            <AIcon size={12} color={aColor} style={{ flexShrink: 0 }} />
+                                                                            <span style={{ flex: 1, fontSize: 12, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.summary}</span>
+                                                                            <span style={{ fontSize: 10.5, color: "#9CA3AF", whiteSpace: "nowrap", flexShrink: 0 }}>{fullTime(entry.at)}</span>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </div>
+
+                                {/* ── pagination ── */}
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, flexWrap: "wrap", gap: 10 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#6B7280" }}>
+                                        <span>Rows per page</span>
+                                        <select value={userRowsPerPage} onChange={(e) => { setUserRowsPerPage(Number(e.target.value)); setUserPage(1); }}
+                                            style={{ border: "1px solid #D1D5DB", borderRadius: 6, padding: "4px 8px", fontSize: 12.5, cursor: "pointer", color: "#111827", background: "#fff" }}>
+                                            {[5, 10, 20, 50].map((n) => <option key={n} value={n}>{n}</option>)}
+                                        </select>
+                                        <span style={{ color: "#9CA3AF" }}>of {uFiltered.length} users</span>
+                                    </div>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                        <button disabled={uPage <= 1} onClick={() => setUserPage((p) => p - 1)}
+                                            style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 10px", fontSize: 12, cursor: uPage <= 1 ? "not-allowed" : "pointer", color: uPage <= 1 ? "#D1D5DB" : "#374151" }}>← Prev</button>
+                                        {Array.from({ length: uTotalPages }, (_, i) => i + 1)
+                                            .filter((p) => p === 1 || p === uTotalPages || Math.abs(p - uPage) <= 1)
+                                            .reduce((acc, p, i, arr) => { if (i > 0 && p - arr[i-1] > 1) acc.push("…"); acc.push(p); return acc; }, [])
+                                            .map((p, i) => p === "…"
+                                                ? <span key={`el-${i}`} style={{ padding: "5px 4px", fontSize: 12, color: "#9CA3AF" }}>…</span>
+                                                : <button key={p} onClick={() => setUserPage(p)}
+                                                    style={{ background: p === uPage ? "#111827" : "none", color: p === uPage ? "#fff" : "#374151", border: `1px solid ${p === uPage ? "#111827" : "#E5E7EB"}`, borderRadius: 6, padding: "5px 11px", fontSize: 12.5, fontWeight: p === uPage ? 700 : 400, cursor: "pointer", minWidth: 34 }}>{p}</button>
+                                            )}
+                                        <button disabled={uPage >= uTotalPages} onClick={() => setUserPage((p) => p + 1)}
+                                            style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 10px", fontSize: 12, cursor: uPage >= uTotalPages ? "not-allowed" : "pointer", color: uPage >= uTotalPages ? "#D1D5DB" : "#374151" }}>Next →</button>
+                                    </div>
+                                </div>
+
+                                {/* role legend */}
+                                <div style={{ marginTop: 18, background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: "11px 18px", display: "flex", gap: 20, flexWrap: "wrap", alignItems: "center" }}>
+                                    <span style={{ fontSize: 11, fontWeight: 700, color: "#9CA3AF", textTransform: "uppercase", letterSpacing: "0.06em" }}>Roles:</span>
+                                    {ROLES.map((r) => (
+                                        <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                            <span style={{ width: 7, height: 7, borderRadius: "50%", background: r.color }} />
+                                            <span style={{ fontSize: 12, fontWeight: 700, color: r.color }}>{r.label}</span>
+                                            <span style={{ fontSize: 12, color: "#9CA3AF" }}>— {r.desc}</span>
+                                        </div>
+                                    ))}
+                                </div>
+
+                            </div>
+                        </div>
+                        );
+                    })()}
+
                     {activeNav === "settings" && (
                         <div className="ps-scroll" style={styles.analyticsWrap}>
                             <div style={{ maxWidth: 600, margin: "0 auto" }}>
@@ -4688,6 +5767,37 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                     <X size={15} />
                                 </button>
                             </div>
+
+                            {/* ── Time summary card ── */}
+                            {selectedJob.startHour != null && (() => {
+                                const totalH = jobTotalHours(selectedJob);
+                                const base = baseDate.getTime();
+                                const startMs  = base + selectedJob.startHour * 3600000;
+                                const finishMs = startMs + totalH * 3600000;
+                                const fmt = (ms) => new Date(ms).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+                                const fmtH = (h) => h % 1 === 0 ? `${h}h` : `${h.toFixed(2)}h`;
+                                return (
+                                    <div style={{ background: "#F0F7FF", border: "1px solid #BBD9F2", borderRadius: 6, padding: "10px 12px", marginBottom: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px" }}>
+                                        <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                                            <Clock size={12} color="#1B6E8C" />
+                                            <span style={{ fontSize: 11, fontWeight: 700, color: "#1B6E8C", textTransform: "uppercase", letterSpacing: "0.06em" }}>Total: {fmtH(totalH)}</span>
+                                            {(selectedJob.setupMin > 0 || (selectedJob.tcDurationMin > 0 && (selectedJob.tools||[]).length > 1)) && (
+                                                <span style={{ fontSize: 10, color: "#6E6E6E", fontFamily: "'IBM Plex Mono',monospace" }}>
+                                                    ({fmtH(selectedJob.duration)} production)
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: 10, fontWeight: 600, color: "#6E6E6E", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Start</div>
+                                            <div style={{ fontSize: 12.5, fontWeight: 600, color: "#262626", fontFamily: "'IBM Plex Mono',monospace" }}>{fmt(startMs)}</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: 10, fontWeight: 600, color: "#6E6E6E", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Finish</div>
+                                            <div style={{ fontSize: 12.5, fontWeight: 600, color: "#262626", fontFamily: "'IBM Plex Mono',monospace" }}>{fmt(finishMs)}</div>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
 
                             <label style={styles.fieldLabel}>job name</label>
                             <input
@@ -4733,6 +5843,44 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 onChange={(e) => updateJob(selectedJob.id, { duration: Math.max(SNAP_HOURS, snapHours(Number(e.target.value) || SNAP_HOURS)) })}
                             />
 
+                            <label style={styles.fieldLabel}>setup time (min)</label>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <input
+                                    className="ps-input"
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    style={{ flex: 1 }}
+                                    value={setupInputVal}
+                                    placeholder="0"
+                                    onChange={(e) => {
+                                        const raw = e.target.value;
+                                        setSetupInputVal(raw);
+                                        // only commit to job when we have a valid non-empty number
+                                        if (raw === "" || raw === "-") return;
+                                        const mins = Math.max(0, Math.round(Number(raw) || 0));
+                                        updateJob(selectedJob.id, { setupMin: mins });
+                                    }}
+                                    onBlur={() => {
+                                        // on blur: commit empty/invalid as 0 and normalise display
+                                        const mins = Math.max(0, Math.round(Number(setupInputVal) || 0));
+                                        setSetupInputVal(String(mins));
+                                        updateJob(selectedJob.id, { setupMin: mins });
+                                    }}
+                                />
+                                {(selectedJob.setupMin || 0) > 0 && (
+                                    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#B45309", background: "#FDF3E4", border: "1px solid #F3DDAE", borderRadius: 6, padding: "4px 8px", whiteSpace: "nowrap", flexShrink: 0 }}>
+                                        <Cog size={11} color="#B45309" />
+                                        {(selectedJob.setupMin / 60).toFixed(2)}h setup
+                                    </div>
+                                )}
+                            </div>
+                            {(selectedJob.setupMin || 0) > 0 && (
+                                <div style={{ fontSize: 11, color: "#8C8C8C", marginTop: 3, fontFamily: "'IBM Plex Mono',monospace" }}>
+                                    production: {selectedJob.duration.toFixed(2)}h · total block: {jobTotalHours(selectedJob).toFixed(2)}h
+                                </div>
+                            )}
+
                             {selectedJob.resourceId && (
                                 <>
                                     <label style={styles.fieldLabel}>start time</label>
@@ -4754,93 +5902,63 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                                 locked (cannot be dragged)
                             </label>
 
-                            <div style={{ marginTop: 14 }}>
-                                <label style={styles.fieldLabel}>Tool change sequence ({(selectedJob.toolChanges || []).length})</label>
-                                {(selectedJob.toolChanges || []).length > 0 && (
-                                    <div style={styles.toolSpanNote}>
-                                        Tool time total: {toolChangesSpanHours(selectedJob.toolChanges).toFixed(2)}h · Job duration: {selectedJob.duration.toFixed(2)}h
-                                    </div>
-                                )}
-                                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                                    {(selectedJob.toolChanges || []).map((c, idx) => (
-                                        <div
-                                            key={c.id}
-                                            draggable
-                                            onDragStart={(e) => {
-                                                setDraggedToolChangeIdx(idx);
-                                                e.dataTransfer.effectAllowed = "move";
-                                            }}
-                                            onDragOver={(e) => e.preventDefault()}
-                                            onDrop={(e) => {
-                                                e.preventDefault();
-                                                if (draggedToolChangeIdx !== null && draggedToolChangeIdx !== idx) {
-                                                    reorderToolChanges(selectedJob.id, draggedToolChangeIdx, idx);
-                                                }
-                                                setDraggedToolChangeIdx(null);
-                                            }}
-                                            onDragEnd={() => setDraggedToolChangeIdx(null)}
-                                            style={{
-                                                ...styles.toolEditCard,
-                                                opacity: draggedToolChangeIdx === idx ? 0.4 : 1,
-                                                borderColor: draggedToolChangeIdx !== null && draggedToolChangeIdx !== idx ? "#1B6E8C55" : styles.toolEditCard.border,
-                                            }}
-                                        >
-                                            <div style={styles.toolEditHeaderRow}>
-                                                <Move size={12} color="#ABABAB" style={{ cursor: "grab", flexShrink: 0 }} title="Drag to reorder" />
-                                                <span style={styles.toolChangeIndex}>#{idx + 1}</span>
-                                                <input
-                                                    className="ps-input"
-                                                    style={styles.toolNumberInput}
-                                                    placeholder="Tool #"
-                                                    value={c.toolNumber || ""}
-                                                    onChange={(e) => updateToolChange(selectedJob.id, c.id, { toolNumber: e.target.value })}
-                                                />
-                                                <input
-                                                    className="ps-input"
-                                                    style={styles.toolNameInput}
-                                                    placeholder="Tool name"
-                                                    value={c.toolName || ""}
-                                                    onChange={(e) => updateToolChange(selectedJob.id, c.id, { toolName: e.target.value })}
-                                                />
-                                                <button style={styles.panelClose} onClick={() => removeToolChange(selectedJob.id, c.id)} title="Delete">
-                                                    <Trash2 size={13} color="#C4372E" />
-                                                </button>
+                            {(selectedJob.tools || []).length > 0 && (
+                                <div style={{ marginTop: 14 }}>
+                                    <label style={styles.fieldLabel}>
+                                        Tools ({(selectedJob.tools || []).length}) · {Math.max(0, (selectedJob.tools || []).length - 1)} change{Math.max(0, (selectedJob.tools || []).length - 1) !== 1 ? "s" : ""}
+                                    </label>
+                                    {/* tool list */}
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 8 }}>
+                                        {(selectedJob.tools || []).map((t, i) => (
+                                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", background: "#F5F5F5", borderRadius: 4, fontSize: 11.5 }}>
+                                                <Wrench size={10} color="#6E6E6E" style={{ flexShrink: 0 }} />
+                                                <span style={{ fontFamily: "'IBM Plex Mono',monospace", color: "#595959" }}>{t.number ? `T${t.number}` : ""}</span>
+                                                <span style={{ flex: 1, color: "#262626", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
+                                                {i < (selectedJob.tools || []).length - 1 && (
+                                                    <span style={{ fontSize: 9, color: "#B45309", background: "#FDF3E4", border: "1px solid #F3DDAE", borderRadius: 3, padding: "1px 5px", flexShrink: 0 }}>
+                                                        change ↓
+                                                    </span>
+                                                )}
                                             </div>
-                                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
-                                                <span style={styles.segmentFieldLabel}>Start (min)</span>
+                                        ))}
+                                    </div>
+                                    {/* single duration input */}
+                                    {Math.max(0, (selectedJob.tools || []).length - 1) > 0 && (
+                                        <>
+                                            <label style={styles.fieldLabel}>Duration per tool change (min)</label>
+                                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                                 <input
+                                                    className="ps-input"
                                                     type="number"
                                                     min={0}
                                                     step={1}
-                                                    className="ps-input"
-                                                    style={styles.shiftBreakTimeInput}
-                                                    value={c.startMin}
-                                                    onChange={(e) => updateToolChange(selectedJob.id, c.id, { startMin: e.target.value })}
-                                                    onBlur={() => updateToolChange(selectedJob.id, c.id, { startMin: Math.max(0, Number(c.startMin) || 0) })}
+                                                    style={{ flex: 1 }}
+                                                    value={selectedJob.tcDurationMin ?? ""}
+                                                    placeholder="0"
+                                                    onChange={(e) => {
+                                                        const v = e.target.value;
+                                                        if (v === "") { updateJob(selectedJob.id, { tcDurationMin: 0 }); return; }
+                                                        updateJob(selectedJob.id, { tcDurationMin: Math.max(0, Number(v) || 0) });
+                                                    }}
+                                                    onBlur={(e) => {
+                                                        const v = Math.max(0, Math.round(Number(e.target.value) || 0));
+                                                        updateJob(selectedJob.id, { tcDurationMin: v });
+                                                    }}
                                                 />
-                                                <span style={styles.segmentFieldLabel}>Duration (min)</span>
-                                                <input
-                                                    type="number"
-                                                    min={1}
-                                                    step={1}
-                                                    className="ps-input"
-                                                    style={styles.shiftBreakTimeInput}
-                                                    value={c.durationMin}
-                                                    onChange={(e) => updateToolChange(selectedJob.id, c.id, { durationMin: e.target.value })}
-                                                    onBlur={() => updateToolChange(selectedJob.id, c.id, { durationMin: Math.max(1, Number(c.durationMin) || 1) })}
-                                                />
+                                                {(selectedJob.tcDurationMin || 0) > 0 && (() => {
+                                                    const changes = Math.max(0, (selectedJob.tools || []).length - 1);
+                                                    const total = changes * selectedJob.tcDurationMin;
+                                                    return (
+                                                        <div style={{ fontSize: 11, color: "#B45309", background: "#FDF3E4", border: "1px solid #F3DDAE", borderRadius: 6, padding: "4px 8px", whiteSpace: "nowrap", flexShrink: 0 }}>
+                                                            {changes} × {selectedJob.tcDurationMin}min = <b>{total}min</b>
+                                                        </div>
+                                                    );
+                                                })()}
                                             </div>
-                                        </div>
-                                    ))}
-                                    <button
-                                        className="ps-addbtn"
-                                        style={{ ...styles.addJobBtn, marginBottom: 0, display: "flex", alignItems: "center", gap: 5, width: "100%", justifyContent: "center" }}
-                                        onClick={() => addToolChange(selectedJob.id)}
-                                    >
-                                        <Plus size={12} /> Add tool change
-                                    </button>
+                                        </>
+                                    )}
                                 </div>
-                            </div>
+                            )}
 
                             {selectedJob.isRunning && (
                                 <div style={styles.runningNote}>
@@ -5012,6 +6130,594 @@ border: blocked ? `1px solid ${ALARM_RED}99` : isOverdue ? `1px solid ${OVERDUE_
                     </div>
                 </div>
             )}
+
+            {/* ── Tool Detail popup ── */}
+            {selectedTool && activeNav === "tools" && (() => {
+                const t = selectedTool;
+                const key = toolKey(t);
+                const usedH = t.actualHours + t.liveHours;
+                const refLife = t.maxLife || TOOL_LIFE_HOURS;
+                const lifePct = Math.min(110, (usedH / refLife) * 100);
+                const expired = lifePct >= 100;
+                const warning = lifePct >= 75 && !expired;
+                const barColor = expired ? "#C4372E" : warning ? "#E8A33D" : "#21A366";
+                const lifeOver = usedH > refLife;
+                const histEntry = toolHistory.find((h) => (h.number || "?") + "::" + h.name === key);
+                const changeLog = (histEntry && histEntry.changeLog) || [];
+
+                function handleSave() {
+                    const maxLifeVal = parseFloat(toolDraft.maxLife);
+                    if (!isNaN(maxLifeVal) && maxLifeVal > 0) updateToolMaxLife(t, maxLifeVal);
+                    const metaPatch = {};
+                    if (toolDraft.diameter !== "") metaPatch.diameter = parseFloat(toolDraft.diameter) || null;
+                    else metaPatch.diameter = null;
+                    if (toolDraft.length !== "") metaPatch.length = parseFloat(toolDraft.length) || null;
+                    else metaPatch.length = null;
+                    if (toolDraft.offsetZ !== "") metaPatch.offsetZ = parseFloat(toolDraft.offsetZ) || null;
+                    else metaPatch.offsetZ = null;
+                    metaPatch.location = toolDraft.location;
+                    if (toolDraft.inventory !== "") metaPatch.inventory = parseInt(toolDraft.inventory) || null;
+                    else metaPatch.inventory = null;
+                    updateToolMeta(key, metaPatch);
+                    setSelectedToolKey(null);
+                }
+
+                return (
+                    <div style={styles.confirmOverlay} onClick={() => setSelectedToolKey(null)}>
+                        <div style={{ ...styles.confirmCard, width: 480, maxWidth: "94vw", maxHeight: "88vh", overflow: "auto", padding: 0 }} onClick={(e) => e.stopPropagation()}>
+                            {/* header */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", borderBottom: "1px solid #E5E7EB", background: "#F9FAFB", borderRadius: "8px 8px 0 0" }}>
+                                <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#EFF6FF", border: "1px solid #BFDBFE", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                    <Wrench size={15} color="#1B6E8C" />
+                                </div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", fontFamily: "'IBM Plex Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                        {t.number ? `T${t.number} · ` : ""}{t.name}
+                                    </div>
+                                    {t.liveHours > 0 && <div style={{ fontSize: 11, color: "#21A366", display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}><span className="ps-running-dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "#21A366" }} />Running now</div>}
+                                </div>
+                                <button style={styles.panelClose} onClick={() => setSelectedToolKey(null)}><X size={15} /></button>
+                            </div>
+
+                            <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
+                                {/* stats */}
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
+                                    {[
+                                        { label: "Estimated", value: `${t.estHours.toFixed(1)}h` },
+                                        { label: "Actual used", value: `${usedH.toFixed(1)}h`, highlight: lifeOver },
+                                        { label: "Active jobs", value: t.jobs.length },
+                                    ].map(({ label, value, highlight }) => (
+                                        <div key={label} style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8, padding: "10px 12px" }}>
+                                            <div style={{ fontSize: 18, fontWeight: 700, color: highlight ? "#C4372E" : "#262626", fontFamily: "'IBM Plex Mono',monospace" }}>{value}</div>
+                                            <div style={{ fontSize: 10.5, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.04em", marginTop: 2 }}>{label}</div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* tool life */}
+                                <div style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: "12px 14px" }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Tool Life</div>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                                        <div style={{ flex: 1, height: 10, background: "#E1E1E1", borderRadius: 4, overflow: "hidden" }}>
+                                            <div style={{ height: "100%", width: `${Math.min(100, lifePct)}%`, background: barColor, borderRadius: 4 }} />
+                                        </div>
+                                        <span style={{ fontSize: 12, fontWeight: 700, color: barColor, flexShrink: 0, minWidth: 40 }}>{lifePct.toFixed(0)}%</span>
+                                    </div>
+                                    <div style={{ fontSize: 11, color: "#6E6E6E", marginBottom: 10 }}>{usedH.toFixed(2)}h used of {refLife.toFixed(1)}h max{lifeOver ? " — replace now" : ""}</div>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                        <label style={{ fontSize: 11.5, color: "#374151", fontWeight: 600, flexShrink: 0 }}>Max life (h):</label>
+                                        <input type="number" min="0.1" step="0.5"
+                                            value={toolDraft.maxLife ?? ""}
+                                            onChange={(e) => setToolDraft((d) => ({ ...d, maxLife: e.target.value }))}
+                                            style={{ width: 80, fontSize: 13, padding: "5px 8px", border: "1px solid #D1D5DB", borderRadius: 6, background: "#fff" }}
+                                        />
+                                        <span style={{ fontSize: 11, color: "#8C8C8C" }}>hours</span>
+                                    </div>
+                                </div>
+
+                                {/* specs */}
+                                <div style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: "12px 14px" }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Specifications</div>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px 10px", marginBottom: 10 }}>
+                                        {[{ label: "Diameter (mm)", field: "diameter" }, { label: "Length (mm)", field: "length" }, { label: "Offset Z", field: "offsetZ" }].map(({ label, field }) => (
+                                            <div key={field}>
+                                                <div style={{ fontSize: 10.5, fontWeight: 600, color: "#6B7280", marginBottom: 3 }}>{label}</div>
+                                                <input type="number" step="0.001" className="ps-input" style={{ fontSize: 12, padding: "5px 8px" }} placeholder="—"
+                                                    value={toolDraft[field] ?? ""}
+                                                    onChange={(e) => setToolDraft((d) => ({ ...d, [field]: e.target.value }))}
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 10px" }}>
+                                        <div>
+                                            <div style={{ fontSize: 10.5, fontWeight: 600, color: "#6B7280", marginBottom: 3 }}>Location</div>
+                                            <select className="ps-select" style={{ fontSize: 12, padding: "5px 8px", width: "100%" }}
+                                                value={toolDraft.location || ""}
+                                                onChange={(e) => setToolDraft((d) => ({ ...d, location: e.target.value }))}>
+                                                <option value="">— unassigned —</option>
+                                                {resources.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
+                                                <option value="storage">Storage / Crib</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: 10.5, fontWeight: 600, color: "#6B7280", marginBottom: 3 }}>Inventory (pcs)</div>
+                                            <input type="number" min={0} step={1} className="ps-input" style={{ fontSize: 12, padding: "5px 8px" }} placeholder="0"
+                                                value={toolDraft.inventory ?? ""}
+                                                onChange={(e) => setToolDraft((d) => ({ ...d, inventory: e.target.value }))}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* jobs */}
+                                {t.jobs.length > 0 && (
+                                    <div style={{ background: "#fff", border: "1px solid #E5E7EB", borderRadius: 8, padding: "12px 14px" }}>
+                                        <div style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>Jobs using this tool</div>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                            {t.jobs.map((j, i) => (
+                                                <div key={j.id + i} style={styles.toolRow} onClick={() => { setSelectedToolKey(null); setActiveNav("schedule"); const found = jobs.find((jj) => jj.id === j.id); if (found) jumpToJob(found); }}>
+                                                    <span style={{ ...styles.legendDot, background: PRODUCTS[jobs.find((jj) => jj.id === j.id)?.product] || "#6E6E6E" }} />
+                                                    <span style={{ ...styles.toolRowName, flex: 1 }}>{j.name}</span>
+                                                    <span style={styles.toolRowHours}>{(j.actualHours + j.liveHours) >= 0.1 ? `${(j.actualHours + j.liveHours).toFixed(1)}h` : "<0.1h"} / {j.estHours.toFixed(1)}h</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* sparkline trend */}
+                                {changeLog.length >= 2 && (() => {
+                                    const sorted = [...changeLog].sort((a, b) => new Date(a.at) - new Date(b.at));
+                                    const maxPct = Math.min(120, Math.max(...sorted.map((e) => Math.min(120, ((e.hoursAtChange || 0) / refLife) * 100)), 100));
+                                    const W = 420, H = 80, PAD = 6;
+                                    const pts = sorted.map((e, i) => {
+                                        const x = PAD + (i / (sorted.length - 1)) * (W - PAD * 2);
+                                        const y = H - PAD - (Math.min(120, ((e.hoursAtChange || 0) / refLife) * 100) / maxPct) * (H - PAD * 2);
+                                        return { x, y, e };
+                                    });
+                                    const polyline = pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+                                    const limitY = H - PAD - (100 / maxPct) * (H - PAD * 2);
+                                    return (
+                                        <div style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: "12px 14px" }}>
+                                            <div style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>Life usage trend</div>
+                                            <div style={{ background: "#fff", borderRadius: 6, border: "1px solid #EDEDED", padding: "8px 6px" }}>
+                                                <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+                                                    {/* 100% reference line */}
+                                                    <line x1={PAD} y1={limitY} x2={W - PAD} y2={limitY} stroke="#F7CFCB" strokeWidth={1} strokeDasharray="4,3" />
+                                                    <text x={W - PAD - 2} y={limitY - 3} fontSize={8} fill="#C4372E" textAnchor="end">100%</text>
+                                                    {/* trend line */}
+                                                    <polyline points={polyline} fill="none" stroke="#1B6E8C" strokeWidth={2} strokeLinejoin="round" />
+                                                    {/* dots */}
+                                                    {pts.map((p, i) => {
+                                                        const pct = Math.min(120, ((p.e.hoursAtChange || 0) / refLife) * 100);
+                                                        const col = pct >= 100 ? "#C4372E" : pct >= 75 ? "#E8A33D" : "#1B6E8C";
+                                                        return (
+                                                            <g key={i}>
+                                                                <circle cx={p.x} cy={p.y} r={4} fill={col} />
+                                                                <title>{new Date(p.e.at).toLocaleDateString()} · {pct.toFixed(0)}% · {p.e.reason || "other"}</title>
+                                                            </g>
+                                                        );
+                                                    })}
+                                                </svg>
+                                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9.5, color: "#8C8C8C", marginTop: 2, padding: "0 4px" }}>
+                                                    <span>{new Date(sorted[0].at).toLocaleDateString()}</span>
+                                                    <span>{sorted.length} change{sorted.length !== 1 ? "s" : ""}</span>
+                                                    <span>{new Date(sorted[sorted.length - 1].at).toLocaleDateString()}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+
+                                {/* footer buttons */}
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, paddingTop: 4 }}>
+                                    <div style={{ display: "flex", gap: 8 }}>
+                                        <button
+                                            style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 14px", height: 34, fontSize: 12, fontWeight: 600, background: "#fff", color: "#374151", border: "1px solid #D1D5DB", borderRadius: 6, cursor: "pointer" }}
+                                            onClick={() => { setChangeToolReason("scheduled"); setChangeToolNote(""); setChangeToolPopup({ number: t.number, name: t.name, jobName: t.jobs[0]?.name || "", usedHours: usedH }); }}
+                                        >
+                                            <Wrench size={13} /> Change Tool
+                                        </button>
+                                        {t.jobs.length === 0 && (
+                                            <button
+                                                style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 14px", height: 34, fontSize: 12, fontWeight: 600, background: "#FEF2F2", color: "#C4372E", border: "1px solid #FECACA", borderRadius: 6, cursor: "pointer" }}
+                                                onClick={() => setConfirmDeleteToolKey(key)}
+                                            >
+                                                <Trash2 size={13} /> Delete
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div style={{ display: "flex", gap: 8 }}>
+                                        <button style={styles.confirmCancelBtn} onClick={() => setSelectedToolKey(null)}>Cancel</button>
+                                        <button
+                                            style={{ ...styles.confirmOkBtn, padding: "0 20px", height: 34, fontSize: 13 }}
+                                            onClick={handleSave}
+                                        >
+                                            Save
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* ── Machine Groups modal ── */}
+            {showGroupModal && (() => {
+                const GROUP_COLORS = ["#1B6E8C","#21A366","#C4372E","#D97706","#7C3AED","#DB2777","#0891B2","#65A30D","#EA580C","#6366F1"];
+                const ungrouped = resources.filter((r) => !machineGroups.some((g) => g.resourceIds.includes(r.id)));
+
+                const handleDragStartMachine = (e, resourceId, fromGroupId) => {
+                    e.dataTransfer.setData("resourceId", resourceId);
+                    e.dataTransfer.setData("fromGroupId", fromGroupId || "");
+                    e.dataTransfer.effectAllowed = "move";
+                };
+                const handleDropOnGroup = (e, targetGroupId) => {
+                    e.preventDefault();
+                    const resourceId = e.dataTransfer.getData("resourceId");
+                    const fromGroupId = e.dataTransfer.getData("fromGroupId");
+                    if (!resourceId) return;
+                    setMachineGroups((gs) => gs.map((g) => {
+                        if (g.id === fromGroupId) return { ...g, resourceIds: g.resourceIds.filter((id) => id !== resourceId) };
+                        if (g.id === targetGroupId) return g.resourceIds.includes(resourceId) ? g : { ...g, resourceIds: [...g.resourceIds, resourceId] };
+                        return g;
+                    }));
+                };
+                const handleDropOnUngrouped = (e) => {
+                    e.preventDefault();
+                    const resourceId = e.dataTransfer.getData("resourceId");
+                    const fromGroupId = e.dataTransfer.getData("fromGroupId");
+                    if (!resourceId || !fromGroupId) return;
+                    setMachineGroups((gs) => gs.map((g) => g.id === fromGroupId ? { ...g, resourceIds: g.resourceIds.filter((id) => id !== resourceId) } : g));
+                };
+
+                return (
+                    <div style={styles.confirmOverlay} onClick={() => setShowGroupModal(false)}>
+                        <div style={{ width: "min(960px, 96vw)", height: "min(700px, 92vh)", background: "#F2F2F2", borderRadius: 12, boxShadow: "0 8px 40px rgba(0,0,0,0.2)", display: "flex", flexDirection: "column", overflow: "hidden" }} onClick={(e) => e.stopPropagation()}>
+
+                            {/* Header */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 18px", background: "#FFFFFF", borderBottom: "1px solid #E5E5E5", flexShrink: 0 }}>
+                                <Layers size={15} color="#6366F1" />
+                                <span style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>Machine Groups</span>
+                                <button style={styles.panelClose} onClick={() => setShowGroupModal(false)}><X size={15} /></button>
+                            </div>
+
+                            {/* Body — 2 columns */}
+                            <div style={{ flex: 1, minHeight: 0, display: "flex", overflow: "hidden" }}>
+
+                                {/* ── LEFT: Groups + Form ── */}
+                                <div className="ps-scroll" style={{ width: 320, flexShrink: 0, borderRight: "1px solid #E5E5E5", overflowY: "auto", background: "#FAFAFA", display: "flex", flexDirection: "column" }}>
+
+                                    {/* Create / Edit form */}
+                                    <div style={{ padding: "12px 12px 10px", background: "#FFFFFF", borderBottom: "1px solid #E5E5E5", flexShrink: 0 }}>
+                                        <div style={{ fontSize: 10, fontWeight: 700, color: "#ABABAB", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                                            {editingGroup ? "Edit Group" : "New Group"}
+                                        </div>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                            <input className="ps-input" value={groupForm.name} onChange={(e) => setGroupForm((f) => ({ ...f, name: e.target.value }))}
+                                                placeholder="Group name (e.g. Line 1, Zone A)"
+                                                style={{ width: "100%", fontSize: 12.5, padding: "6px 10px", borderRadius: 4, border: "1px solid #D9D9D9", boxSizing: "border-box" }} />
+                                            <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                                                {GROUP_COLORS.map((c) => (
+                                                    <div key={c} onClick={() => setGroupForm((f) => ({ ...f, color: c }))}
+                                                        style={{ width: 22, height: 22, borderRadius: 4, background: c, cursor: "pointer", boxSizing: "border-box", border: groupForm.color === c ? "3px solid #262626" : "2px solid transparent", flexShrink: 0 }} />
+                                                ))}
+                                                <input type="color" value={groupForm.color} onChange={(e) => setGroupForm((f) => ({ ...f, color: e.target.value }))}
+                                                    style={{ width: 22, height: 22, padding: 0, border: "1px solid #D9D9D9", borderRadius: 4, cursor: "pointer", flexShrink: 0 }} />
+                                                <div style={{ marginLeft: "auto", width: 44, height: 22, borderRadius: 4, background: groupForm.color }} />
+                                            </div>
+                                            <div style={{ display: "flex", gap: 6 }}>
+                                                <button
+                                                    onClick={editingGroup ? updateGroup : createGroup}
+                                                    disabled={!groupForm.name.trim()}
+                                                    style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, height: 30, fontSize: 12, fontWeight: 700, background: groupForm.name.trim() ? groupForm.color : "#C8C8C8", color: "#fff", border: "none", borderRadius: 6, cursor: groupForm.name.trim() ? "pointer" : "not-allowed" }}>
+                                                    {editingGroup ? <><Cog size={12} /> Update</> : <><Plus size={12} /> Create</>}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Groups list */}
+                                    <div style={{ padding: "10px 12px 6px", fontSize: 10, fontWeight: 700, color: "#ABABAB", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                                        Groups ({machineGroups.length})
+                                    </div>
+
+                                    {machineGroups.length === 0 && (
+                                        <div style={{ padding: "16px 14px", fontSize: 12, color: "#ABABAB", textAlign: "center" }}>
+                                            <Layers size={22} color="#D9D9D9" style={{ marginBottom: 6 }} />
+                                            <div>No groups yet</div>
+                                            <div style={{ fontSize: 11, marginTop: 3 }}>Create one above</div>
+                                        </div>
+                                    )}
+
+                                    {machineGroups.map((g) => {
+                                        const isEditing = editingGroup === g.id;
+                                        const members = g.resourceIds.map((id) => resources.find((r) => r.id === id)).filter(Boolean);
+                                        return (
+                                            <div key={g.id}
+                                                onDragOver={(e) => e.preventDefault()}
+                                                onDrop={(e) => handleDropOnGroup(e, g.id)}
+                                                style={{ margin: "5px 10px", borderRadius: 8, border: `2px solid ${isEditing ? g.color : g.color + "40"}`, background: isEditing ? g.color + "0D" : "#FFFFFF", transition: "border 0.15s" }}>
+                                                {/* group header */}
+                                                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", borderBottom: members.length > 0 ? `1px solid ${g.color}20` : "none" }}>
+                                                    <div style={{ width: 10, height: 10, borderRadius: 2, background: g.color, flexShrink: 0 }} />
+                                                    <span style={{ fontWeight: 700, fontSize: 12.5, flex: 1, color: "#1A1A1A" }}>{g.name}</span>
+                                                    <span style={{ fontSize: 10, background: g.color, color: "#fff", borderRadius: 8, padding: "1px 6px", fontWeight: 700 }}>{members.length}</span>
+                                                    <button title="Edit" style={{ ...styles.panelClose, opacity: 0.5 }} onClick={() => openEditGroup(g)}><Cog size={12} /></button>
+                                                    <button title="Delete group" style={{ ...styles.panelClose, opacity: 0.5 }} onClick={() => deleteGroup(g.id)}><Trash2 size={12} /></button>
+                                                </div>
+                                                {/* members drop zone */}
+                                                <div style={{ padding: members.length > 0 ? "6px 8px" : "8px", minHeight: 34, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                                                    {members.length === 0 && (
+                                                        <div style={{ width: "100%", textAlign: "center", fontSize: 10, color: "#C8C8C8", pointerEvents: "none" }}>Drop machines here</div>
+                                                    )}
+                                                    {members.map((r) => (
+                                                        <div key={r.id} draggable onDragStart={(e) => handleDragStartMachine(e, r.id, g.id)}
+                                                            style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 7px", borderRadius: 4, background: g.color + "18", border: `1px solid ${g.color}40`, cursor: "grab", fontSize: 11, fontWeight: 700, fontFamily: "'IBM Plex Mono',monospace", userSelect: "none" }}>
+                                                            <Move size={9} color={g.color} style={{ flexShrink: 0 }} />
+                                                            {r.name}
+                                                            <span onClick={() => setMachineGroups((gs) => gs.map((gg) => gg.id === g.id ? { ...gg, resourceIds: gg.resourceIds.filter((id) => id !== r.id) } : gg))}
+                                                                style={{ cursor: "pointer", color: "#ABABAB", lineHeight: 1, marginLeft: 1 }}>×</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                    <div style={{ flex: 1 }} />
+                                </div>
+
+                                {/* ── RIGHT: All machines ── */}
+                                <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                                    <div className="ps-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "12px 14px" }}>
+
+                                        {/* Ungrouped */}
+                                        <div onDragOver={(e) => e.preventDefault()} onDrop={handleDropOnUngrouped} style={{ marginBottom: 18 }}>
+                                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                                                <span style={{ fontSize: 10, fontWeight: 700, color: "#ABABAB", letterSpacing: "0.06em", textTransform: "uppercase" }}>Ungrouped ({ungrouped.length})</span>
+                                                {editingGroup && ungrouped.length > 0 && (
+                                                    <button onClick={() => setMachineGroups((gs) => gs.map((g) => g.id === editingGroup ? { ...g, resourceIds: [...new Set([...g.resourceIds, ...ungrouped.map((r) => r.id)])] } : g))}
+                                                        style={{ display: "flex", alignItems: "center", gap: 4, padding: "0 12px", height: 24, fontSize: 11, fontWeight: 600, background: "#FFFFFF", color: "#595959", border: "1px solid #D9D9D9", borderRadius: 4, cursor: "pointer", whiteSpace: "nowrap" }}>+ Add all</button>
+                                                )}
+                                            </div>
+                                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))", gap: 6, minHeight: 36 }}>
+                                                {ungrouped.length === 0 && (
+                                                    <div style={{ gridColumn: "1/-1", fontSize: 11, color: "#C8C8C8", padding: "6px 0" }}>All machines are in a group</div>
+                                                )}
+                                                {ungrouped.map((r) => (
+                                                    <div key={r.id} draggable onDragStart={(e) => handleDragStartMachine(e, r.id, "")}
+                                                        onClick={() => { if (!editingGroup) return; setMachineGroups((gs) => gs.map((g) => g.id === editingGroup ? { ...g, resourceIds: g.resourceIds.includes(r.id) ? g.resourceIds : [...g.resourceIds, r.id] } : g)); }}
+                                                        style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 9px", borderRadius: 6, background: "#FFFFFF", border: "1px solid #E5E5E5", cursor: editingGroup ? "pointer" : "grab", userSelect: "none" }}>
+                                                        <Move size={10} color="#C8C8C8" style={{ flexShrink: 0 }} />
+                                                        <span style={{ fontSize: 11.5, fontWeight: 700, fontFamily: "'IBM Plex Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Grouped — by group */}
+                                        {machineGroups.map((g) => {
+                                            const members = g.resourceIds.map((id) => resources.find((r) => r.id === id)).filter(Boolean);
+                                            if (members.length === 0) return null;
+                                            return (
+                                                <div key={g.id} style={{ marginBottom: 16 }}>
+                                                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                                                        <div style={{ width: 8, height: 8, borderRadius: 2, background: g.color, flexShrink: 0 }} />
+                                                        <span style={{ fontSize: 10, fontWeight: 700, color: g.color, letterSpacing: "0.06em", textTransform: "uppercase" }}>{g.name}</span>
+                                                    </div>
+                                                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))", gap: 6 }}>
+                                                        {members.map((r) => (
+                                                            <div key={r.id} draggable onDragStart={(e) => handleDragStartMachine(e, r.id, g.id)}
+                                                                style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 9px", borderRadius: 6, background: g.color + "0E", border: `1px solid ${g.color}40`, cursor: "grab", userSelect: "none" }}>
+                                                                <Move size={10} color={g.color} style={{ flexShrink: 0 }} />
+                                                                <span style={{ fontSize: 11.5, fontWeight: 700, fontFamily: "'IBM Plex Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#1A1A1A" }}>{r.name}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+            {/* ── Add Tool modal ── */}
+            {showAddToolModal && (
+                <div style={styles.confirmOverlay} onClick={() => setShowAddToolModal(false)}>
+                    <div style={{ ...styles.confirmCard, width: 420, maxWidth: "92vw" }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+                            <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#E3F0FB", border: "1px solid #BBD9F2", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                <Plus size={18} color="#1B6E8C" />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <div style={{ fontWeight: 700, fontSize: 15, color: "#262626" }}>Add Tool</div>
+                                <div style={{ fontSize: 11.5, color: "#6E6E6E" }}>Create a standalone tool entry</div>
+                            </div>
+                            <button style={{ ...styles.panelClose, marginLeft: "auto" }} onClick={() => setShowAddToolModal(false)}><X size={15} /></button>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", gap: 10 }}>
+                                <div>
+                                    <div style={{ fontSize: 11, fontWeight: 600, color: "#6B7280", marginBottom: 4 }}>T-Number</div>
+                                    <input
+                                        className="ps-input"
+                                        placeholder="e.g. 01"
+                                        value={addToolForm.number}
+                                        onChange={(e) => setAddToolForm((f) => ({ ...f, number: e.target.value }))}
+                                        style={{ fontSize: 13, padding: "7px 10px", fontFamily: "'IBM Plex Mono',monospace" }}
+                                    />
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: 11, fontWeight: 600, color: "#6B7280", marginBottom: 4 }}>Tool Name <span style={{ color: "#C4372E" }}>*</span></div>
+                                    <input
+                                        className="ps-input"
+                                        placeholder="e.g. 10mm End Mill"
+                                        value={addToolForm.name}
+                                        onChange={(e) => setAddToolForm((f) => ({ ...f, name: e.target.value }))}
+                                        style={{ fontSize: 13, padding: "7px 10px" }}
+                                    />
+                                </div>
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                                <div>
+                                    <div style={{ fontSize: 11, fontWeight: 600, color: "#6B7280", marginBottom: 4 }}>Max Life (hours)</div>
+                                    <input
+                                        type="number" min="0.1" step="0.5"
+                                        className="ps-input"
+                                        value={addToolForm.maxLife}
+                                        onChange={(e) => setAddToolForm((f) => ({ ...f, maxLife: e.target.value }))}
+                                        style={{ fontSize: 13, padding: "7px 10px" }}
+                                    />
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: 11, fontWeight: 600, color: "#6B7280", marginBottom: 4 }}>Machine</div>
+                                    <select
+                                        className="ps-select"
+                                        value={addToolForm.machineId}
+                                        onChange={(e) => setAddToolForm((f) => ({ ...f, machineId: e.target.value }))}
+                                        style={{ fontSize: 13, padding: "7px 10px", width: "100%" }}
+                                    >
+                                        <option value="">-- none --</option>
+                                        {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                            {(() => {
+                                const dupKey = (addToolForm.number || "?") + "::" + addToolForm.name.trim();
+                                const isDup = addToolForm.name.trim() && toolHistory.some((h) => (h.number || "?") + "::" + h.name === dupKey);
+                                return isDup ? (
+                                    <div style={{ fontSize: 12, color: "#B45309", background: "#FDF3E4", border: "1px solid #F3DDAE", borderRadius: 6, padding: "7px 12px" }}>
+                                        A tool with this number and name already exists.
+                                    </div>
+                                ) : null;
+                            })()}
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>
+                            <button style={styles.confirmCancelBtn} onClick={() => setShowAddToolModal(false)}>Cancel</button>
+                            <button
+                                style={{ ...styles.confirmOkBtn, padding: "0 22px", height: 34, fontSize: 13, opacity: !addToolForm.name.trim() ? 0.5 : 1 }}
+                                disabled={!addToolForm.name.trim()}
+                                onClick={() => {
+                                    const maxLife = parseFloat(addToolForm.maxLife) || TOOL_LIFE_HOURS;
+                                    addManualTool({ number: addToolForm.number.trim(), name: addToolForm.name.trim(), maxLife, machineId: addToolForm.machineId });
+                                    setShowAddToolModal(false);
+                                }}
+                            >
+                                Add Tool
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Confirm Delete Tool ── */}
+            {confirmDeleteToolKey && (
+                <div style={styles.confirmOverlay} onClick={() => setConfirmDeleteToolKey(null)}>
+                    <div style={{ ...styles.confirmCard, width: 380, maxWidth: "92vw" }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                            <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#FDECEB", border: "1px solid #F7CFCB", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                <Trash2 size={18} color="#C4372E" />
+                            </div>
+                            <div>
+                                <div style={{ fontWeight: 700, fontSize: 15, color: "#262626" }}>Delete Tool</div>
+                                <div style={{ fontSize: 12, color: "#6E6E6E", fontFamily: "'IBM Plex Mono',monospace" }}>{confirmDeleteToolKey.split("::").reverse().join(" · T")}</div>
+                            </div>
+                        </div>
+                        <div style={{ fontSize: 13, color: "#595959", marginBottom: 20, lineHeight: 1.5 }}>
+                            This will permanently remove the tool record and its history. This cannot be undone.
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                            <button style={styles.confirmCancelBtn} onClick={() => setConfirmDeleteToolKey(null)}>Cancel</button>
+                            <button
+                                style={{ ...styles.confirmOkBtn, background: "#C4372E", borderColor: "#C4372E", padding: "0 20px", height: 34, fontSize: 13 }}
+                                onClick={() => deleteManualTool(confirmDeleteToolKey)}
+                            >
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Change Tool popup ── */}
+            {changeToolPopup && (() => {
+                const REASONS = [
+                    { id: "scheduled", label: "Scheduled change", color: "#187A3E", bg: "#E3F5E9", border: "#A7F3D0" },
+                    { id: "worn",      label: "Worn out",         color: "#B45309", bg: "#FDF3E4", border: "#F3DDAE" },
+                    { id: "broken",    label: "Broken / damaged", color: "#C4372E", bg: "#FDECEB", border: "#F7CFCB" },
+                    { id: "other",     label: "Other",            color: "#3B5EA6", bg: "#EEF4FF", border: "#C7D2FE" },
+                ];
+                return (
+                    <div style={styles.confirmOverlay} onClick={() => setChangeToolPopup(null)}>
+                        <div style={{ ...styles.confirmCard, width: 400, maxWidth: "92vw" }} onClick={(e) => e.stopPropagation()}>
+                            {/* header */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#FDF3E4", border: "1px solid #F3DDAE", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                    <Wrench size={18} color="#B45309" />
+                                </div>
+                                <div>
+                                    <div style={{ fontWeight: 700, fontSize: 15, color: "#262626" }}>Change Tool</div>
+                                    <div style={{ fontSize: 12, color: "#6E6E6E", fontFamily: "'IBM Plex Mono',monospace" }}>
+                                        {changeToolPopup.number ? `T${changeToolPopup.number} · ` : ""}{changeToolPopup.name}
+                                    </div>
+                                </div>
+                                <button style={{ ...styles.panelClose, marginLeft: "auto" }} onClick={() => setChangeToolPopup(null)}><X size={15} /></button>
+                            </div>
+
+                            {/* used hours summary */}
+                            <div style={{ background: "#F5F5F5", borderRadius: 6, padding: "8px 12px", marginBottom: 16, fontSize: 12.5, color: "#595959", display: "flex", alignItems: "center", gap: 6 }}>
+                                <Clock size={13} color="#6E6E6E" />
+                                Used <b style={{ color: "#262626", margin: "0 4px" }}>{changeToolPopup.usedHours.toFixed(2)}h</b> before this change · will reset to <b style={{ color: "#187A3E", marginLeft: 4 }}>0.00h</b>
+                            </div>
+
+                            {/* reason selection */}
+                            <div style={{ marginBottom: 14 }}>
+                                <div style={{ fontSize: 11.5, fontWeight: 700, color: "#595959", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>Reason for change</div>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                    {REASONS.map((r) => (
+                                        <button key={r.id} onClick={() => setChangeToolReason(r.id)}
+                                            style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 8, border: `2px solid ${changeToolReason === r.id ? r.color : "#E8E8E8"}`, background: changeToolReason === r.id ? r.bg : "#FAFAFA", cursor: "pointer", textAlign: "left" }}>
+                                            <div style={{ width: 8, height: 8, borderRadius: "50%", background: r.color, flexShrink: 0 }} />
+                                            <span style={{ fontSize: 12.5, fontWeight: changeToolReason === r.id ? 700 : 500, color: changeToolReason === r.id ? r.color : "#404040" }}>{r.label}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* optional note */}
+                            <div style={{ marginBottom: 20 }}>
+                                <div style={{ fontSize: 11.5, fontWeight: 700, color: "#595959", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>Note (optional)</div>
+                                <input className="ps-input" placeholder="e.g. replaced with new insert" value={changeToolNote} onChange={(e) => setChangeToolNote(e.target.value)} />
+                            </div>
+
+                            {/* buttons */}
+                            <div style={{ display: "flex", gap: 8 }}>
+                                <button style={styles.confirmCancelBtn} onClick={() => setChangeToolPopup(null)}>Cancel</button>
+                                <button
+                                    style={{ ...styles.confirmOkBtn, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: "#1B6E8C" }}
+                                    onClick={() => {
+                                        changeToolAndReset({
+                                            number: changeToolPopup.number,
+                                            name: changeToolPopup.name,
+                                            jobName: changeToolPopup.jobName,
+                                            reason: changeToolReason + (changeToolNote ? ` — ${changeToolNote}` : ""),
+                                            hoursAtChange: changeToolPopup.usedHours,
+                                        });
+                                        setChangeToolPopup(null);
+                                    }}
+                                >
+                                    <Wrench size={13} /> Confirm Change & Reset
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {linkPrompt && (
                 <div style={styles.confirmOverlay} onClick={cancelLinkPrompt}>
@@ -5277,17 +6983,12 @@ const styles = {
         display: "flex",
         alignItems: "center",
         gap: 10,
-        margin: "10px 18px 16px",
-        position: "sticky",
-        top: 0,
+        position: "fixed",
+        top: 70,
+        right: 18,
         zIndex: 60,
         flexWrap: "wrap",
-        // this row has no explicit width, so as a block-level div it stretches across the
-        // full app content area (a transparent hitbox) even though only the pills are visible.
-        // Being position:sticky with a higher z-index than the edit panel (50), that invisible
-        // area sat on top of the panel's inputs and silently ate every click before it reached
-        // them. pointer-events:none lets clicks fall through the empty space; the pills below
-        // opt back in with pointer-events:auto so they stay clickable.
+        justifyContent: "flex-end",
         pointerEvents: "none",
     },
     statusBar: {
@@ -5295,7 +6996,7 @@ const styles = {
         alignItems: "center",
         gap: 8,
         width: "fit-content",
-        maxWidth: "calc(50% - 5px)",
+        maxWidth: 480,
         padding: "6px 10px",
         borderRadius: 4,
         background: "linear-gradient(135deg, #00D65E 0%, #00A844 100%)",
@@ -5346,7 +7047,7 @@ const styles = {
         alignItems: "center",
         gap: 8,
         width: "fit-content",
-        maxWidth: "calc(50% - 5px)",
+        maxWidth: 480,
         marginLeft: "auto",
         padding: "6px 10px",
         borderRadius: 4,
@@ -5954,29 +7655,33 @@ const styles = {
     barChartLabel: { fontSize: 10, color: "#6E6E6E", fontFamily: "'IBM Plex Mono',monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 46 },
     toolsLayout: {
         display: "flex",
-        gap: 14,
-        alignItems: "flex-start",
-        marginBottom: 14,
+        gap: 0,
+        alignItems: "stretch",
+        height: "calc(100vh - 170px)",
+        minHeight: 500,
+        border: "1px solid #E2E8F0",
+        borderRadius: 8,
+        overflow: "hidden",
+        background: "#F8FAFC",
+        boxShadow: "0 1px 4px rgba(27,110,140,0.06)",
     },
     toolsSidebar: {
-        width: 230,
+        width: 240,
         flexShrink: 0,
         background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
-        borderRadius: 3,
-        boxShadow: "0 1px 4px rgba(27,110,140,0.06)",
-        maxHeight: 420,
+        borderRight: "1px solid #E2E8F0",
         overflowY: "auto",
-        padding: 5,
+        padding: "6px 4px",
         boxSizing: "border-box",
     },
     toolsSidebarItem: {
         display: "flex",
         alignItems: "center",
         gap: 8,
-        padding: "7px 9px",
-        borderRadius: 3,
+        padding: "8px 10px",
+        borderRadius: 6,
         cursor: "pointer",
+        marginBottom: 2,
     },
     toolsSidebarName: { fontSize: 12, fontFamily: "'IBM Plex Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
     toolsSidebarSub: { fontSize: 10, color: "#6E6E6E" },
@@ -5986,12 +7691,10 @@ const styles = {
     toolsDetail: {
         flex: 1,
         minWidth: 0,
-        background: "#FFFFFF",
-        border: "1px solid #D9D9D9",
-        borderRadius: 3,
-        padding: "14px 16px",
-        boxShadow: "0 1px 4px rgba(27,110,140,0.06)",
+        overflowY: "auto",
+        padding: "20px 24px",
         boxSizing: "border-box",
+        background: "#F8FAFC",
     },
     toolsSummarySection: {
         background: "#FFFFFF",
@@ -6138,8 +7841,8 @@ const styles = {
     resourceType: { fontSize: 10.5, color: "#6E6E6E" },
     utilTrack: { width: "100%", height: 4, background: "#E1E1E1", borderRadius: 3, marginTop: 3, overflow: "hidden" },
     utilFill: { height: "100%", background: "linear-gradient(90deg,#1B6E8C,#4FA8C9)", borderRadius: 3 },
-    pool: { borderTop: "1px solid #D9D9D9", background: "#F5F5F5", padding: "12px 18px 14px" },
-    poolLabel: { fontSize: 10.5, letterSpacing: "0.06em", color: "#6E6E6E", textTransform: "uppercase", marginBottom: 8 },
+    pool: { borderTop: "1px solid #D9D9D9", background: "#F5F5F5", padding: "8px 14px 10px", display: "flex", flexDirection: "column", flexShrink: 0 },
+    poolLabel: { fontSize: 10.5, letterSpacing: "0.06em", color: "#6E6E6E", textTransform: "uppercase" },
     ncNotice: {
         display: "flex",
         alignItems: "center",
@@ -6172,8 +7875,8 @@ const styles = {
         flexShrink: 0,
         background: "#FFFFFF",
         borderRadius: 3,
-        padding: "7px 11px",
-        minWidth: 96,
+        padding: "5px 10px",
+        minWidth: 100,
         cursor: "grab",
         userSelect: "none",
         border: "1px solid #D9D9D9",
