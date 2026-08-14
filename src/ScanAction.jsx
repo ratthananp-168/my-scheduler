@@ -1,28 +1,731 @@
-import { useState } from "react";
-import Login from "./Login";
-import ScanAction from "./ScanAction";
-import ProductionScheduler from "./production-scheduler";
-import "./App.css";
+import { useEffect, useState, useRef } from "react";
+import { CheckCircle2, XCircle, Loader2, AlertTriangle, AlertOctagon, Play, Square, Cpu, AlertCircle, Camera, CameraOff, Lock } from "lucide-react";
+import { supabase } from "./supabaseClient";
+import jsQR from "jsqr";
 
-// read URL params once at module load — never re-read on re-render
-const _params     = new URLSearchParams(window.location.search);
-const _scanAction = _params.get("scan");
-const _scanJobId  = _params.get("job");
-const _alarmAction= _params.get("alarm");
-const _alarmResId = _params.get("resource");
-const IS_SCAN_ROUTE = (_scanAction && _scanJobId) || (_alarmAction && _alarmResId);
+const ALARM_REASONS = [
+    { id: "breakdown", label: "Machine breakdown" },
+    { id: "material",  label: "Material shortage" },
+    { id: "quality",   label: "Quality issue" },
+    { id: "other",     label: "Assistance needed" },
+];
 
-function App() {
-  const [authed, setAuthed] = useState(
-    sessionStorage.getItem("ps-authed") === "1"
-  );
+const RUNNING_GREEN      = "#009140";
+const RUNNING_GREEN_DARK = "#00612B";
+const ALARM_RED          = "#FF2D20";
+const ALARM_RED_DARK     = "#D6180A";
+const WARN_AMBER         = "#B45309";
+const BIND_BLUE          = "#1D4ED8";
+const BIND_BG            = "#EFF6FF";
 
-  // must be logged in before any scan/alarm action
-  if (!authed) return <Login onSuccess={() => setAuthed(true)} />;
-
-  if (IS_SCAN_ROUTE) return <ScanAction />;
-
-  return <ProductionScheduler />;
+// Parse QR URL → { kind, jobId } or null
+function parseQRUrl(text) {
+    try {
+        // support both absolute URLs and raw query strings
+        let params;
+        if (text.startsWith("http")) {
+            params = new URL(text).searchParams;
+        } else if (text.includes("?")) {
+            params = new URLSearchParams(text.split("?")[1]);
+        } else {
+            params = new URLSearchParams(text);
+        }
+        const scan = params.get("scan");
+        const job  = params.get("job");
+        if (scan === "start" && job) return { kind: "start", jobId: job };
+    } catch {}
+    return null;
 }
 
-export default App;
+// ── Session bound-resource (set after scan 1, read at scan 2) ────────────────
+const SS_RES_ID   = "ps-bound-resource-id";
+const SS_RES_NAME = "ps-bound-resource-name";
+const SS_RES_AT   = "ps-bound-resource-at";
+const BIND_EXPIRE  = 30 * 60 * 1000; // 30 min
+
+function getBoundResource() {
+    try {
+        const id   = sessionStorage.getItem(SS_RES_ID);
+        const name = sessionStorage.getItem(SS_RES_NAME);
+        const at   = parseInt(sessionStorage.getItem(SS_RES_AT) || "0", 10);
+        if (!id || Date.now() - at > BIND_EXPIRE) { clearBoundResource(); return null; }
+        return { id, name };
+    } catch { return null; }
+}
+function saveBoundResource(id, name) {
+    try {
+        sessionStorage.setItem(SS_RES_ID, id);
+        sessionStorage.setItem(SS_RES_NAME, name);
+        sessionStorage.setItem(SS_RES_AT, String(Date.now()));
+    } catch {}
+}
+function clearBoundResource() {
+    try {
+        [SS_RES_ID, SS_RES_NAME, SS_RES_AT].forEach((k) => sessionStorage.removeItem(k));
+    } catch {}
+}
+
+export default function ScanAction({ kind, action, id, onDone }) {
+    const [phase,       setPhase]       = useState("loading");
+    const [resource,    setResource]    = useState(null);
+    const [job,         setJob]         = useState(null);
+    const [plannedRes,  setPlannedRes]  = useState(null);
+    const [errorMsg,    setErrorMsg]    = useState("");
+    const [alarmReason, setAlarmReason] = useState(ALARM_REASONS[0].id);
+    const [blockReason, setBlockReason] = useState("");
+    const [allData,     setAllData]     = useState(null);
+    const [camError,    setCamError]    = useState("");
+    const [scanning,    setScanning]    = useState(false);
+    const [isOverride,  setIsOverride]  = useState(false);
+    const [showPinModal, setShowPinModal] = useState(false);
+    const [overridePin,  setOverridePinVal] = useState("");
+    const [pinInput,     setPinInput]     = useState("");
+    const [pinError,     setPinError]     = useState("");
+    const [boundForStandalone, setBoundForStandalone] = useState(null); // bound resource in standalone job flow
+
+    const videoRef   = useRef(null);
+    const canvasRef  = useRef(null);
+    const streamRef  = useRef(null);
+    const rafRef     = useRef(null);
+    const mountedRef = useRef(true);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        load();
+        return () => {
+            mountedRef.current = false;
+            stopCamera();
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // ── Camera helpers ────────────────────────────────────────────────────────
+    async function startCamera() {
+        setCamError("");
+        setScanning(true);
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+                audio: false,
+            });
+            if (!mountedRef.current) { stream.getTracks().forEach((t) => t.stop()); return; }
+            streamRef.current = stream;
+            if (videoRef.current) {
+                videoRef.current.srcObject = stream;
+                videoRef.current.play();
+                requestAnimationFrame(scanFrame);
+            }
+        } catch (err) {
+            setScanning(false);
+            if (err.name === "NotAllowedError") setCamError("Camera access denied — please allow camera in browser settings.");
+            else setCamError("Cannot open camera: " + err.message);
+        }
+    }
+
+    function stopCamera() {
+        if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+        if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
+        if (videoRef.current) videoRef.current.srcObject = null;
+        if (mountedRef.current) setScanning(false);
+    }
+
+    function scanFrame() {
+        const video  = videoRef.current;
+        const canvas = canvasRef.current;
+        if (!video || !canvas || !mountedRef.current || !streamRef.current) return;
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            canvas.width  = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx  = canvas.getContext("2d");
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const img  = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
+            if (code?.data) {
+                const parsed = parseQRUrl(code.data);
+                if (parsed) {
+                    stopCamera();
+                    handleJobScanned(parsed.jobId, resource);
+                    return;
+                }
+            }
+        }
+        rafRef.current = requestAnimationFrame(scanFrame);
+    }
+
+    // ── Load schedule data ────────────────────────────────────────────────────
+    async function load() {
+        const { data, error } = await supabase
+            .from("schedule_state").select("data").eq("id", 1).single();
+
+        if (error || !data?.data) {
+            setPhase("error");
+            setErrorMsg("Failed to load data. Please try again.");
+            return;
+        }
+
+        const sd = data.data;
+        setAllData(sd);
+
+        if (kind === "bind") {
+            const res = (sd.resources || []).find((r) => r.id === id);
+            if (!res) { setPhase("error"); setErrorMsg("Machine not found in system."); return; }
+            setResource(res);
+            setPhase("bind_confirm");
+
+        } else if (kind === "job") {
+            const j = (sd.jobs || []).find((jj) => jj.id === id);
+            if (!j) { setPhase("error"); setErrorMsg("Job not found in system."); return; }
+            const res = (sd.resources || []).find((r) => r.id === j.resourceId);
+            setJob(j);
+            setPlannedRes(res || null);
+
+            if (action === "start") {
+                // require scan 1 (machine bind) before scan 2 (job start)
+                const bound = getBoundResource();
+                if (!bound) {
+                    setPhase("no_bind");
+                    return;
+                }
+                // check alarm
+                if (res?.alarmActive) {
+                    const label = ALARM_REASONS.find((a) => a.id === res.alarmReason)?.label || "Alarm";
+                    setBlockReason(label);
+                    setPhase("blocked");
+                    return;
+                }
+                // check mismatch
+                const pin = sd.appConfig?.overridePin || "";
+                setOverridePinVal(pin);
+                const match = res && bound.id === res.id;
+                setIsOverride(!match);
+                setBoundForStandalone(bound);
+                setPhase(match ? "job_confirm" : "standalone_mismatch");
+            } else {
+                // stop — no bind required
+                setPhase("job_confirm");
+            }
+
+        } else {
+            const res = (sd.resources || []).find((r) => r.id === id);
+            if (!res) { setPhase("error"); setErrorMsg("Machine not found in system."); return; }
+            setResource(res);
+            setPhase("alarm_confirm");
+        }
+    }
+
+    // ── Bind confirm → open camera ────────────────────────────────────────────
+    function handleConfirmBind() {
+        // save bound resource to sessionStorage so scan-2 (job QR) can read it
+        // even if opened in a new URL/tab on the same device
+        saveBoundResource(resource.id, resource.name);
+        setPhase("bind_scanning");
+        setTimeout(startCamera, 80); // let DOM render first
+    }
+
+    // ── Job scanned (from camera decode) ─────────────────────────────────────
+    async function handleJobScanned(jobId, boundResource) {
+        setPhase("loading");
+        // always fetch fresh data — allData may be stale if jobs changed after page load
+        const { data, error } = await supabase
+            .from("schedule_state").select("data").eq("id", 1).single();
+        if (error || !data?.data) { setPhase("error"); setErrorMsg("Failed to load data. Please try again."); return; }
+
+        const sd = data.data;
+        const j = (sd.jobs || []).find((jj) => jj.id === jobId);
+        if (!j) { setPhase("error"); setErrorMsg("Job not found, id: " + jobId); return; }
+        const planned = (sd.resources || []).find((r) => r.id === j.resourceId) || null;
+        setJob(j);
+        setPlannedRes(planned);
+
+        if (planned?.alarmActive) {
+            const label = ALARM_REASONS.find((a) => a.id === planned.alarmReason)?.label || "Alarm";
+            setBlockReason(label);
+            setPhase("blocked");
+            return;
+        }
+
+        // fetch override PIN setting
+        const pin = sd.appConfig?.overridePin || "";
+        setOverridePinVal(pin);
+
+        const match = planned && boundResource && planned.id === boundResource.id;
+        setIsOverride(!match);
+        setPhase(match ? "bind_job_confirm" : "bind_mismatch");
+    }
+
+    // ── Supabase writes ───────────────────────────────────────────────────────
+    async function handleConfirmJobStart(targetJob) {
+        setPhase("working");
+        const { data, error } = await supabase
+            .from("schedule_state").select("data").eq("id", 1).single();
+        if (error || !data?.data) { setPhase("error"); setErrorMsg("Failed to load data. Please try again."); return; }
+
+        const nowIso = new Date().toISOString();
+        // override → record actualResourceId (where it's actually running)
+        // planning resourceId stays unchanged so Gantt planning bar doesn't move
+        const actualResId = isOverride && resource ? resource.id : null;
+        const jobs = (data.data.jobs || []).map((j) =>
+            j.id !== targetJob.id ? j : {
+                ...j,
+                isRunning: true,
+                runStartedAt: nowIso,
+                lastScanAt: nowIso,
+                completed: false,
+                actualResourceId: actualResId,
+            }
+        );
+        const { error: ue } = await supabase
+            .from("schedule_state")
+            .update({ data: { ...data.data, jobs }, updated_at: nowIso }).eq("id", 1);
+        if (ue) { setPhase("error"); setErrorMsg("Failed to save status. Please try again."); return; }
+
+        // verify write: log what was saved so we can confirm actualResourceId is set
+        const saved = jobs.find((j) => j.id === targetJob.id);
+        console.log("[ScanAction] job saved:", saved?.id, "actualResourceId:", saved?.actualResourceId, "isOverride:", isOverride);
+        setPhase("done");
+    }
+
+    async function handleConfirmJob() {
+        setPhase("working");
+        const { data, error } = await supabase
+            .from("schedule_state").select("data").eq("id", 1).single();
+        if (error || !data?.data) { setPhase("error"); setErrorMsg("Failed to load data. Please try again."); return; }
+
+        const nowIso = new Date().toISOString();
+        const toolHistory = Array.isArray(data.data.toolHistory)
+            ? data.data.toolHistory.map((h) => ({ ...h })) : [];
+
+        function upsertTool(number, name, hoursToAdd, jobName) {
+            if (!name || hoursToAdd <= 0) return;
+            const idx = toolHistory.findIndex((h) => (h.number || null) === (number || null) && h.name === name);
+            if (idx === -1) { toolHistory.push({ number: number || null, name, actualHours: hoursToAdd, lastRunAt: nowIso, jobNames: jobName ? [jobName] : [] }); return; }
+            const ex = toolHistory[idx];
+            const jn = ex.jobNames ? [...ex.jobNames] : [];
+            if (jobName && !jn.includes(jobName)) { jn.push(jobName); if (jn.length > 20) jn.shift(); }
+            toolHistory[idx] = { ...ex, actualHours: (ex.actualHours || 0) + hoursToAdd, lastRunAt: nowIso, jobNames: jn };
+        }
+
+        const jobs = (data.data.jobs || []).map((j) => {
+            if (j.id !== id) return j;
+            if (action === "start") {
+                const actualResId = isOverride && boundForStandalone ? boundForStandalone.id : null;
+                return { ...j, isRunning: true, runStartedAt: nowIso, lastScanAt: nowIso, completed: false, actualResourceId: actualResId };
+            }
+            const elapsedH = j.runStartedAt ? Math.max(0, (Date.now() - new Date(j.runStartedAt).getTime()) / 3600000) : 0;
+            const jt = Array.isArray(j.tools) ? j.tools : [];
+            const est = jt.reduce((s, t) => s + (t.hours || 0), 0);
+            const updTools = jt.map((t) => {
+                const share = est > 0 ? (t.hours || 0) / est : jt.length ? 1 / jt.length : 0;
+                const h = elapsedH * share;
+                upsertTool(t.number, t.name, h, j.name);
+                return { ...t, actualHours: (t.actualHours || 0) + h };
+            });
+            return { ...j, isRunning: false, completed: true, runStartedAt: null, lastScanAt: nowIso, actualRunHours: (j.actualRunHours || 0) + elapsedH, tools: jt.length > 0 ? updTools : j.tools };
+        });
+
+        const { error: ue } = await supabase.from("schedule_state")
+            .update({ data: { ...data.data, jobs, toolHistory }, updated_at: nowIso }).eq("id", 1);
+        if (ue) { setPhase("error"); setErrorMsg("Failed to save status. Please try again."); return; }
+        setPhase("done");
+    }
+
+    async function handleConfirmAlarm() {
+        setPhase("working");
+        const { data, error } = await supabase
+            .from("schedule_state").select("data").eq("id", 1).single();
+        if (error || !data?.data) { setPhase("error"); setErrorMsg("Failed to load data. Please try again."); return; }
+
+        const resources = (data.data.resources || []).map((r) =>
+            r.id !== id ? r : action === "raise"
+                ? { ...r, alarmActive: true, alarmReason, alarmAt: Date.now() }
+                : { ...r, alarmActive: false, alarmReason: null, alarmAt: null }
+        );
+        const { error: ue } = await supabase.from("schedule_state")
+            .update({ data: { ...data.data, resources }, updated_at: new Date().toISOString() }).eq("id", 1);
+        if (ue) { setPhase("error"); setErrorMsg("Failed to save status. Please try again."); return; }
+        setPhase("done");
+    }
+
+    // ── Derived ───────────────────────────────────────────────────────────────
+    const isStart = kind === "job" && action === "start";
+    const isStop  = kind === "job" && action === "stop";
+    const isRaise = kind === "alarm" && action === "raise";
+    const isClear = kind === "alarm" && action === "clear";
+    // In bind flow: show the actual scanned machine (resource), not the planned one (plannedRes)
+    const resDisplay = kind === "bind"
+        ? (resource?.name || "unassigned")
+        : (plannedRes?.name || (kind !== "job" ? resource?.name : "") || "unassigned");
+
+    const doneIsGreen = isStart || isClear || phase === "bind_job_confirm" || phase === "bind_mismatch";
+
+    return (
+        <div style={styles.wrap}>
+            <style>{`
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap');
+                @keyframes spin   { to { transform:rotate(360deg); } }
+                @keyframes fadeIn { from { opacity:0;transform:translateY(8px); } to { opacity:1;transform:translateY(0); } }
+                @keyframes scan   { 0%,100% { top:8%; } 50% { top:82%; } }
+                .ps-spin   { animation:spin 1s linear infinite; }
+                .ps-fadein { animation:fadeIn 0.22s ease; }
+                .ps-scanline { position:absolute; left:0; right:0; height:2px; background:rgba(29,78,216,0.7); animation:scan 1.8s ease-in-out infinite; box-shadow:0 0 8px rgba(29,78,216,0.5); }
+                .ps-btn-primary:hover { filter:brightness(0.9); }
+                .ps-btn-cancel:hover  { background:#EBEBEB !important; }
+                .ps-scan-select { background:#fff; border:1px solid #C8C8C8; color:#262626; border-radius:8px; padding:9px 10px; font-family:'Segoe UI','Inter',sans-serif; font-size:13.5px; width:100%; box-sizing:border-box; margin-top:14px; }
+            `}</style>
+
+            {/* hidden canvas for QR decode */}
+            <canvas ref={canvasRef} style={{ display: "none" }} />
+
+            <div style={styles.card} className="ps-fadein" key={phase}>
+
+                {/* Loading */}
+                {phase === "loading" && (
+                    <><Loader2 className="ps-spin" size={40} color="#1B6E8C" /><div style={styles.title}>Loading...</div></>
+                )}
+
+                {/* ── Step 1: confirm machine ── */}
+                {phase === "bind_confirm" && resource && (
+                    <>
+                        <div style={{ ...styles.badge, background: BIND_BG, color: BIND_BLUE }}>Step 1 / 2 — Select Machine</div>
+                        <div style={{ ...styles.iconWrap, background: BIND_BG }}>
+                            <Cpu size={28} color={BIND_BLUE} strokeWidth={2.5} />
+                        </div>
+                        <div style={styles.mono}>{resource.name}</div>
+                        <div style={styles.sub}>{resource.type}</div>
+                        <div style={{ ...styles.title, marginTop: 8 }}>Confirm machine selection?</div>
+                        <div style={styles.btnRow}>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
+                            <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: BIND_BLUE }} onClick={handleConfirmBind}>
+                                Confirm → Scan Job
+                            </button>
+                        </div>
+                    </>
+                )}
+
+                {/* ── Step 2: camera viewfinder ── */}
+                {phase === "bind_scanning" && resource && (
+                    <>
+                        <div style={{ ...styles.badge, background: BIND_BG, color: BIND_BLUE }}>Step 2 / 2 — Scan Job QR</div>
+                        <div style={styles.mono}>{resource.name}</div>
+
+                        {/* viewfinder */}
+                        <div style={styles.viewfinderWrap}>
+                            <video ref={videoRef} style={styles.video} playsInline muted />
+                            {scanning && <div className="ps-scanline" />}
+                            {/* corner brackets */}
+                            {["tl","tr","bl","br"].map((c) => (
+                                <div key={c} style={{ ...styles.corner, ...cornerPos[c] }} />
+                            ))}
+                        </div>
+
+                        {camError && (
+                            <div style={styles.camErr}>
+                                <CameraOff size={14} /> {camError}
+                            </div>
+                        )}
+
+                        {!scanning && !camError && (
+                            <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: BIND_BLUE, width: "100%", marginTop: 10 }}
+                                onClick={startCamera}>
+                                <Camera size={15} style={{ marginRight: 6 }} /> Open Camera
+                            </button>
+                        )}
+
+                        <div style={styles.sub}>Point camera at Job QR (START) to begin work</div>
+                        <button className="ps-btn-cancel" style={{ ...styles.cancelBtn, width: "100%" }} onClick={onDone}>Cancel</button>
+                    </>
+                )}
+
+                {/* ── Mismatch ── */}
+                {phase === "bind_mismatch" && job && (
+                    <>
+                        <div style={{ ...styles.badge, background: "#FEF3C7", color: WARN_AMBER }}>⚠ Job does not match selected machine</div>
+                        <div style={{ ...styles.iconWrap, background: "#FEF3C7" }}>
+                            <AlertCircle size={28} color={WARN_AMBER} strokeWidth={2.5} />
+                        </div>
+                        <div style={styles.mono}>{job.name}</div>
+                        <div style={styles.mismatchTable}>
+                            <div style={styles.mismatchRow}>
+                                <span style={styles.mismatchLabel}>Scanned machine</span>
+                                <span style={{ ...styles.mismatchVal, color: WARN_AMBER }}>{resource?.name || "—"}</span>
+                            </div>
+                            <div style={{ ...styles.mismatchRow, borderTop: "1px solid #E8E8E8", paddingTop: 6 }}>
+                                <span style={styles.mismatchLabel}>Planned machine</span>
+                                <span style={{ ...styles.mismatchVal, color: RUNNING_GREEN_DARK }}>{plannedRes?.name || "Unassigned"}</span>
+                            </div>
+                        </div>
+                        <div style={styles.warnBox}>
+                            This job is planned on <b>{plannedRes?.name || "another machine"}</b><br />
+                            Please verify with Supervisor before proceeding.
+                        </div>
+                        <div style={styles.btnRow}>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
+                            <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: WARN_AMBER, fontSize: 12.5 }}
+                                onClick={() => { setPinInput(""); setPinError(""); overridePin ? setShowPinModal(true) : setPhase("bind_job_confirm"); }}>
+                                Override &amp; Start
+                            </button>
+                        </div>
+                    </>
+                )}
+
+                {/* ── Bind job confirm ── */}
+                {phase === "bind_job_confirm" && job && (
+                    <>
+                        <div style={{ ...styles.badge, background: "#E3F5E9", color: RUNNING_GREEN_DARK }}>Step 2 / 2 — Start Job</div>
+                        <div style={{ ...styles.iconWrap, background: "#E3F5E9" }}>
+                            <Play size={28} color={RUNNING_GREEN_DARK} strokeWidth={2.5} />
+                        </div>
+                        <div style={styles.mono}>{job.name}</div>
+                        <div style={styles.sub}>{resource?.name || plannedRes?.name} · {job.product}</div>
+                        {isOverride && (
+                            <div style={{ fontSize: 11, color: WARN_AMBER, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 5, padding: "4px 10px", marginTop: 2 }}>
+                                ⚠ Override — running on {resource?.name} instead of {plannedRes?.name}
+                            </div>
+                        )}
+                        <div style={{ ...styles.title, marginTop: 8 }}>Confirm start job?</div>
+                        <div style={styles.btnRow}>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
+                            <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: RUNNING_GREEN }}
+                                onClick={() => handleConfirmJobStart(job)}>Confirm Start</button>
+                        </div>
+                    </>
+                )}
+
+                {/* ── No bind: scanned job before machine ── */}
+                {phase === "no_bind" && (
+                    <>
+                        <div style={{ ...styles.badge, background: "#FEF3C7", color: WARN_AMBER }}>
+                            ⚠ Machine not scanned yet
+                        </div>
+                        <div style={{ ...styles.iconWrap, background: "#FEF3C7" }}>
+                            <Cpu size={28} color={WARN_AMBER} strokeWidth={2.5} />
+                        </div>
+                        <div style={styles.mono}>{job?.name}</div>
+                        <div style={{ ...styles.title, color: WARN_AMBER, marginTop: 8 }}>
+                            Please scan machine first
+                        </div>
+                        <div style={styles.sub}>
+                            Always scan machine QR (BIND) first<br />
+                            then scan job QR (START)
+                        </div>
+                        <button className="ps-btn-primary" style={styles.btn} onClick={onDone}>
+                            Go scan machine
+                        </button>
+                    </>
+                )}
+
+                {/* ── Standalone mismatch (job scanned via URL, bound resource doesn't match) ── */}
+                {phase === "standalone_mismatch" && job && (
+                    <>
+                        <div style={{ ...styles.badge, background: "#FEF3C7", color: WARN_AMBER }}>⚠ Job does not match selected machine</div>
+                        <div style={{ ...styles.iconWrap, background: "#FEF3C7" }}>
+                            <AlertCircle size={28} color={WARN_AMBER} strokeWidth={2.5} />
+                        </div>
+                        <div style={styles.mono}>{job.name}</div>
+                        <div style={styles.mismatchTable}>
+                            <div style={styles.mismatchRow}>
+                                <span style={styles.mismatchLabel}>Scanned machine</span>
+                                <span style={{ ...styles.mismatchVal, color: WARN_AMBER }}>{boundForStandalone?.name || "—"}</span>
+                            </div>
+                            <div style={{ ...styles.mismatchRow, borderTop: "1px solid #E8E8E8", paddingTop: 6 }}>
+                                <span style={styles.mismatchLabel}>Planned machine</span>
+                                <span style={{ ...styles.mismatchVal, color: RUNNING_GREEN_DARK }}>{plannedRes?.name || "Unassigned"}</span>
+                            </div>
+                        </div>
+                        <div style={styles.warnBox}>
+                            This job is planned on <b>{plannedRes?.name || "another machine"}</b><br />
+                            Please verify with Supervisor before proceeding.
+                        </div>
+                        <div style={styles.btnRow}>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
+                            <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: WARN_AMBER, fontSize: 12.5 }}
+                                onClick={() => { setPinInput(""); setPinError(""); overridePin ? setShowPinModal(true) : setPhase("job_confirm"); }}>
+                                Override &amp; Start
+                            </button>
+                        </div>
+                    </>
+                )}
+
+                {/* ── Standalone job confirm ── */}
+                {phase === "job_confirm" && job && (
+                    <>
+                        <div style={{ ...styles.iconWrap, background: isStart ? "#E3F5E9" : "#FFF1EF" }}>
+                            {isStart ? <Play size={28} color={RUNNING_GREEN_DARK} strokeWidth={2.5} />
+                                     : <Square size={28} color="#C4372E" strokeWidth={2.5} />}
+                        </div>
+                        <div style={styles.mono}>{job.name}</div>
+                        <div style={styles.sub}>{resDisplay} · {job.product}</div>
+                        <div style={{ ...styles.title, marginTop: 8 }}>Confirm {isStart ? "start" : "stop"} job?</div>
+                        <div style={styles.btnRow}>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
+                            <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: isStart ? RUNNING_GREEN : "#C4372E" }}
+                                onClick={handleConfirmJob}>{isStart ? "Confirm Start" : "Confirmหยุดงาน"}</button>
+                        </div>
+                    </>
+                )}
+
+                {/* ── Alarm confirm ── */}
+                {phase === "alarm_confirm" && resource && (
+                    <>
+                        <div style={{ ...styles.iconWrap, background: isRaise ? "#FDECEB" : "#E3F5E9" }}>
+                            {isRaise ? <AlertOctagon size={28} color={ALARM_RED} strokeWidth={2.5} />
+                                     : <CheckCircle2 size={28} color={RUNNING_GREEN_DARK} strokeWidth={2.5} />}
+                        </div>
+                        <div style={styles.mono}>{resource.name}</div>
+                        <div style={styles.sub}>{resource.type}</div>
+                        <div style={{ ...styles.title, marginTop: 8 }}>Confirm{isRaise ? "Alarm" : "Cancelแจ้งเตือน"}?</div>
+                        {isRaise && (
+                            <select className="ps-scan-select" value={alarmReason} onChange={(e) => setAlarmReason(e.target.value)}>
+                                {ALARM_REASONS.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+                            </select>
+                        )}
+                        <div style={styles.btnRow}>
+                            <button className="ps-btn-cancel" style={styles.cancelBtn} onClick={onDone}>Cancel</button>
+                            <button className="ps-btn-primary" style={{ ...styles.confirmBtn, background: isRaise ? ALARM_RED : RUNNING_GREEN }}
+                                onClick={handleConfirmAlarm}>{isRaise ? "Confirm Alarm" : "Confirm Clear"}</button>
+                        </div>
+                    </>
+                )}
+
+                {/* ── Blocked ── */}
+                {phase === "blocked" && (
+                    <>
+                        <div style={{ ...styles.iconWrap, background: "#FBE4E2" }}>
+                            <AlertOctagon size={28} color={ALARM_RED} strokeWidth={2.5} />
+                        </div>
+                        <div style={styles.mono}>{job?.name}</div>
+                        <div style={styles.sub}>{resDisplay}</div>
+                        <div style={{ ...styles.title, color: ALARM_RED_DARK, marginTop: 8 }}>Cannot Start Job</div>
+                        <div style={styles.sub}>Machine {resDisplay} has active alarm: {blockReason}<br />Please clear the alarm before starting.</div>
+                        <button className="ps-btn-primary ps-scan-btn" style={styles.btn} onClick={onDone}>Back to Schedule</button>
+                    </>
+                )}
+
+                {/* ── Working ── */}
+                {phase === "working" && (
+                    <><Loader2 className="ps-spin" size={40} color="#1B6E8C" /><div style={styles.title}>Saving...</div></>
+                )}
+
+                {/* ── Done ── */}
+                {phase === "done" && (
+                    <>
+                        <div style={{ ...styles.iconWrap, background: doneIsGreen ? "#E3F5E9" : "#FDECEB" }}>
+                            {(isStart || phase === "bind_job_confirm") && <CheckCircle2 size={30} color="#21A366" />}
+                            {isStop  && <XCircle size={30} color="#C4372E" />}
+                            {isRaise && <AlertOctagon size={30} color={ALARM_RED} />}
+                            {isClear && <CheckCircle2 size={30} color="#21A366" />}
+                            {(!isStart && !isStop && !isRaise && !isClear) && <CheckCircle2 size={30} color="#21A366" />}
+                        </div>
+                        <div style={styles.mono}>{job?.name || resource?.name}</div>
+                        <div style={{ ...styles.title, color: doneIsGreen ? "#21A366" : "#C4372E" }}>
+                            {isStop ? "Stopped" : isRaise ? "Alarm raised" : isClear ? "Alarm cleared" : "Started"}
+                        </div>
+                        <div style={styles.sub}>{new Date().toLocaleString("th-TH")}</div>
+                        <button className="ps-btn-primary" style={styles.btn} onClick={onDone}>Back to Schedule</button>
+                    </>
+                )}
+
+                {/* ── Error ── */}
+                {phase === "error" && (
+                    <>
+                        <div style={{ ...styles.iconWrap, background: "#FDECEB" }}>
+                            <AlertTriangle size={30} color="#C4372E" />
+                        </div>
+                        <div style={{ ...styles.title, color: "#C4372E" }}>An error occurred</div>
+                        <div style={styles.sub}>{errorMsg}</div>
+                        <button className="ps-btn-primary" style={styles.btn} onClick={onDone}>Back to Schedule</button>
+                    </>
+                )}
+            </div>
+
+            {/* ── PIN Modal overlay ── */}
+            {showPinModal && (
+                <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 24 }}>
+                    <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "28px 24px", width: "100%", maxWidth: 320, boxShadow: "0 20px 60px rgba(0,0,0,0.25)", textAlign: "center" }}>
+                        <div style={{ width: 48, height: 48, borderRadius: 8, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
+                            <Lock size={24} color={WARN_AMBER} />
+                        </div>
+                        <div style={{ fontWeight: 700, fontSize: 16, color: "#262626", marginBottom: 4 }}>Enter Override PIN</div>
+                        <div style={{ fontSize: 12.5, color: "#6E6E6E", marginBottom: 16, lineHeight: 1.6 }}>
+                            This job runs on a different machine than planned.<br />Supervisor PIN required to override.
+                        </div>
+                        <input
+                            type="password"
+                            inputMode="numeric"
+                            maxLength={8}
+                            value={pinInput}
+                            onChange={(e) => { setPinInput(e.target.value.replace(/\D/g, "")); setPinError(""); }}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                    if (pinInput === overridePin) {
+                                        setShowPinModal(false);
+                                        setPhase(phase === "bind_mismatch" || kind === "bind" ? "bind_job_confirm" : "job_confirm");
+                                    } else { setPinError("Incorrect PIN"); setPinInput(""); }
+                                }
+                            }}
+                            autoFocus
+                            style={{ width: "100%", boxSizing: "border-box", border: pinError ? "2px solid #C4372E" : "2px solid #E8E8E8", borderRadius: 8, padding: "14px 12px", fontSize: 28, letterSpacing: 12, textAlign: "center", fontFamily: "'IBM Plex Mono',monospace", outline: "none", marginBottom: 8 }}
+                            placeholder="••••"
+                            autoComplete="off"
+                        />
+                        {pinError && (
+                            <div style={{ fontSize: 12, color: "#C4372E", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 5, padding: "6px 10px", marginBottom: 8 }}>
+                                {pinError}
+                            </div>
+                        )}
+                        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                            <button style={{ flex: 1, background: "#FFFFFF", border: "1px solid #C8C8C8", color: "#595959", borderRadius: 6, padding: "11px 0", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}
+                                onClick={() => { setShowPinModal(false); setPinInput(""); setPinError(""); }}>
+                                Cancel
+                            </button>
+                            <button style={{ flex: 1.5, background: WARN_AMBER, color: "#FFFFFF", border: "none", borderRadius: 6, padding: "11px 0", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}
+                                onClick={() => {
+                                    if (pinInput === overridePin) {
+                                        setShowPinModal(false);
+                                        // bind flow → bind_job_confirm, standalone flow → job_confirm
+                                        setPhase(phase === "bind_mismatch" || kind === "bind" ? "bind_job_confirm" : "job_confirm");
+                                    } else { setPinError("Incorrect PIN"); setPinInput(""); }
+                                }}>
+                                Confirm
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+export function broadcastJobScan(jobId) {
+    try { const ch = new BroadcastChannel("ps-scan"); ch.postMessage({ jobId }); ch.close(); } catch {}
+}
+
+const cornerPos = {
+    tl: { top: 0,    left: 0,    borderTopWidth: 3,    borderLeftWidth: 3,    borderBottomWidth: 0, borderRightWidth: 0 },
+    tr: { top: 0,    right: 0,   borderTopWidth: 3,    borderRightWidth: 3,   borderBottomWidth: 0, borderLeftWidth: 0 },
+    bl: { bottom: 0, left: 0,    borderBottomWidth: 3, borderLeftWidth: 3,    borderTopWidth: 0,    borderRightWidth: 0 },
+    br: { bottom: 0, right: 0,   borderBottomWidth: 3, borderRightWidth: 3,   borderTopWidth: 0,    borderLeftWidth: 0 },
+};
+
+const styles = {
+    wrap: { width:"100vw", height:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#F2F2F2", fontFamily:"'Segoe UI','Inter',sans-serif", boxSizing:"border-box", padding:20 },
+    card: { width:"100%", maxWidth:360, background:"#FFFFFF", border:"1px solid #D9D9D9", borderRadius:4, padding:"28px 24px", display:"flex", flexDirection:"column", alignItems:"center", gap:8, boxShadow:"0 8px 28px rgba(38,38,38,0.08)", boxSizing:"border-box", textAlign:"center" },
+    badge: { fontSize:11.5, fontWeight:700, padding:"3px 10px", borderRadius:20, marginBottom:4 },
+    iconWrap: { width:56, height:56, borderRadius:4, display:"flex", alignItems:"center", justifyContent:"center", marginBottom:6 },
+    mono: { fontFamily:"'IBM Plex Mono',monospace", fontSize:15, color:"#262626", fontWeight:600 },
+    title: { fontFamily:"'Segoe UI',sans-serif", fontWeight:700, fontSize:17, color:"#262626" },
+    sub: { fontSize:12.5, color:"#6E6E6E", marginBottom:6, lineHeight:1.6 },
+    viewfinderWrap: { position:"relative", width:"100%", aspectRatio:"1/1", background:"#000", borderRadius:8, overflow:"hidden", marginTop:4, marginBottom:4 },
+    video: { width:"100%", height:"100%", objectFit:"cover", display:"block" },
+    corner: { position:"absolute", width:22, height:22, borderColor:"#FFFFFF", borderStyle:"solid", borderWidth:3 },
+    camErr: { display:"flex", alignItems:"center", gap:6, fontSize:12, color:ALARM_RED_DARK, background:"#FEF2F2", border:"1px solid #FECACA", borderRadius:6, padding:"7px 10px", width:"100%", boxSizing:"border-box", textAlign:"left" },
+    warnBox: { fontSize:12, color:"#78350F", background:"#FFFBEB", border:"1px solid #FDE68A", borderRadius:6, padding:"8px 12px", textAlign:"left", lineHeight:1.65, width:"100%", boxSizing:"border-box" },
+    mismatchTable: { width:"100%", background:"#FAFAFA", border:"1px solid #E8E8E8", borderRadius:6, padding:"10px 14px", display:"flex", flexDirection:"column", gap:6 },
+    mismatchRow: { display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:12.5, paddingBottom:2 },
+    mismatchLabel: { color:"#6E6E6E", fontWeight:500 },
+    mismatchVal: { fontFamily:"'IBM Plex Mono',monospace", fontSize:12, fontWeight:700 },
+    btnRow: { display:"flex", gap:10, marginTop:16, width:"100%" },
+    cancelBtn: { flex:1, background:"#FFFFFF", border:"1px solid #C8C8C8", color:"#595959", borderRadius:3, padding:"12px 0", fontSize:13.5, fontWeight:600, cursor:"pointer", fontFamily:"'Segoe UI','Inter',sans-serif" },
+    confirmBtn: { flex:1.5, border:"none", color:"#FFFFFF", borderRadius:3, padding:"12px 0", fontSize:13.5, fontWeight:700, cursor:"pointer", fontFamily:"'Segoe UI','Inter',sans-serif", display:"flex", alignItems:"center", justifyContent:"center" },
+    btn: { marginTop:16, width:"100%", background:"#1B6E8C", color:"#FFFFFF", border:"none", borderRadius:3, padding:"11px 0", fontSize:13.5, fontWeight:600, cursor:"pointer", fontFamily:"'Segoe UI','Inter',sans-serif" },
+};

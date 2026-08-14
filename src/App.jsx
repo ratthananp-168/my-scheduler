@@ -1,26 +1,42 @@
 import { useState } from "react";
 import Login from "./Login";
-import ScanAction from "./ScanAction";
+import ScanAction, { broadcastJobScan } from "./ScanAction";
 import ProductionScheduler from "./production-scheduler";
 import "./App.css";
-
-// read URL params once at module load — never re-read on re-render
-const _params      = new URLSearchParams(window.location.search);
-const _scanAction  = _params.get("scan");
-const _scanJobId   = _params.get("job");
-const _alarmAction = _params.get("alarm");
-const _alarmResId  = _params.get("resource");
-const IS_SCAN_ROUTE = (_scanAction && _scanJobId) || (_alarmAction && _alarmResId);
 
 function App() {
   const [authed, setAuthed] = useState(
     sessionStorage.getItem("ps-authed") === "1"
   );
 
-  // must be logged in before any scan/alarm action
-  if (!authed) return <Login onSuccess={() => setAuthed(true)} />;
+  const params        = new URLSearchParams(window.location.search);
+  const scanAction    = params.get("scan");      // "start" | "stop"
+  const scanJobId     = params.get("job");
+  const alarmAction   = params.get("alarm");     // "raise" | "clear"
+  const alarmResId    = params.get("resource");
+  const bindAction    = params.get("bind");      // "resource"
 
-  if (IS_SCAN_ROUTE) return <ScanAction />;
+  const goHome = () => { window.location.href = window.location.origin; };
+
+  // Scan 1 — bind machine (opens ScanAction in bind mode, stays on page waiting)
+  if (bindAction === "resource" && alarmResId) {
+    return <ScanAction kind="bind" action="resource" id={alarmResId} onDone={goHome} />;
+  }
+
+  // Scan 2 — job start/stop
+  // If a bind tab is waiting, broadcast this job id to it so it can proceed inline.
+  // Then render normally on this tab too (standalone fallback).
+  if (scanAction && scanJobId) {
+    if (scanAction === "start") broadcastJobScan(scanJobId);
+    return <ScanAction kind="job" action={scanAction} id={scanJobId} onDone={goHome} />;
+  }
+
+  // Alarm raise/clear (unchanged)
+  if (alarmAction && alarmResId) {
+    return <ScanAction kind="alarm" action={alarmAction} id={alarmResId} onDone={goHome} />;
+  }
+
+  if (!authed) return <Login onSuccess={() => setAuthed(true)} />;
 
   return <ProductionScheduler />;
 }

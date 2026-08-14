@@ -61,7 +61,6 @@ export default function Login({ onSuccess }) {
             sessionStorage.setItem("ps-authed", "1");
             sessionStorage.setItem("ps-username", match.username);
             sessionStorage.setItem("ps-role", match.role);
-            sessionStorage.setItem("ps-user-id", match.id);
             // record last login time — fire-and-forget, don't block onSuccess
             supabase.from("schedule_state").select("data").eq("id", 1).single().then(({ data }) => {
                 if (!data?.data) return;

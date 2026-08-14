@@ -266,7 +266,6 @@ const STATUS_META = {
     idle: { label: "Idle", color: "#6E6E6E", Icon: PauseCircle },
     maintenance: { label: "Maintenance", color: "#E8A33D", Icon: Cog },
     down: { label: "Down", color: "#F0625B", Icon: CircleOff },
-    alarm: { label: "Alarm", color: "#C4372E", Icon: CircleOff },
 };
 
 function cloneJobs() {
@@ -617,7 +616,6 @@ useEffect(() => {
     const [userFormAvatar, setUserFormAvatar] = useState(""); // base64 data URL
     const [userFormPassword, setUserFormPassword] = useState("");
     const [userFormRole, setUserFormRole] = useState("operator");
-    const [userFormMachineId, setUserFormMachineId] = useState("");
     const [userFormError, setUserFormError] = useState("");
     const [userFormSaving, setUserFormSaving] = useState(false);
     const [selectedUserId, setSelectedUserId] = useState(null);
@@ -2419,7 +2417,7 @@ useEffect(() => {
     // clears the "ps-authed" flag that Login.jsx sets and App.jsx checks on mount, then
     // reloads so App.jsx re-evaluates and shows the login screen again
     // ── User management ──────────────────────────────────────────────────────
-    async function addUser(username, password, role, email, avatar, machineId) {
+    async function addUser(username, password, role, email, avatar) {
         if (!username.trim()) { setUserFormError("Username is required"); return false; }
         if (password.length < 4) { setUserFormError("Password must be at least 4 characters"); return false; }
         if (users.find((u) => u.username.toLowerCase() === username.trim().toLowerCase())) {
@@ -2427,7 +2425,7 @@ useEffect(() => {
         }
         setUserFormSaving(true);
         const passwordHash = await hashPassword(password);
-        const newUser = { id: newId("usr"), username: username.trim(), email: (email || "").trim(), avatar: avatar || "", passwordHash, role, machineId: machineId || "", createdAt: new Date().toISOString() };
+        const newUser = { id: newId("usr"), username: username.trim(), email: (email || "").trim(), avatar: avatar || "", passwordHash, role, createdAt: new Date().toISOString() };
         setUsers((prev) => [...prev, newUser]);
         setUserFormSaving(false);
         return true;
@@ -2454,10 +2452,6 @@ useEffect(() => {
         setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, avatar: avatar || "" } : u)));
     }
 
-    function updateUserMachine(userId, machineId) {
-        setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, machineId: machineId || "" } : u)));
-    }
-
     function deleteUser(userId) {
         const me = sessionStorage.getItem("ps-username");
         const target = users.find((u) => u.id === userId);
@@ -2472,7 +2466,6 @@ useEffect(() => {
         setUserFormAvatar("");
         setUserFormPassword("");
         setUserFormRole("operator");
-        setUserFormMachineId("");
         setUserFormError("");
     }
 
@@ -2483,7 +2476,6 @@ useEffect(() => {
         setUserFormAvatar(user.avatar || "");
         setUserFormPassword("");
         setUserFormRole(user.role);
-        setUserFormMachineId(user.machineId || "");
         setUserFormError("");
     }
 
@@ -2673,27 +2665,6 @@ useEffect(() => {
         window.__psLogToolChange = logToolChange;
         return () => { delete window.__psLogToolChange; };
     }, []);
-
-    // expose users list and machine-check helper so ScanAction.jsx can validate machine assignment
-    useEffect(() => {
-        window.__psUsers = users;
-        // Returns { allowed: bool, assignedMachineName: string|null, jobMachineName: string|null }
-        // ScanAction calls this before proceeding with a START/STOP scan
-        window.__psCheckUserMachine = (jobResourceId) => {
-            const username = sessionStorage.getItem("ps-user-id") || sessionStorage.getItem("ps-username");
-            const user = users.find((u) => u.username === username || u.id === username);
-            if (!user || user.role !== "operator" || !user.machineId) return { allowed: true, assignedMachineName: null, jobMachineName: null };
-            const assignedMachine = resources.find((r) => r.id === user.machineId);
-            const jobMachine = resources.find((r) => r.id === jobResourceId);
-            const allowed = user.machineId === jobResourceId;
-            return {
-                allowed,
-                assignedMachineName: assignedMachine ? assignedMachine.name : user.machineId,
-                jobMachineName: jobMachine ? jobMachine.name : (jobResourceId || "unassigned"),
-            };
-        };
-        return () => { delete window.__psUsers; delete window.__psCheckUserMachine; };
-    }, [users, resources]);
 
     const selectedTool = selectedToolKey ? (visibleToolSummaryFiltered.find((t) => toolKey(t) === selectedToolKey) || toolsByMachine.flatMap((g) => g.tools).find((t) => toolKey(t) === selectedToolKey) || null) : null;
 
@@ -3337,7 +3308,7 @@ useEffect(() => {
                                     </div>
                                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                                         {resources.map((r) => {
-                                            const meta = STATUS_META[r.status] || STATUS_META["idle"];
+                                            const meta = STATUS_META[r.status] || STATUS_META.idle;
                                             return (
                                                 <div
                                                     key={r.id}
@@ -3696,7 +3667,7 @@ useEffect(() => {
                                     </div>
 
                                     {fidsResources.map((r, rowIndex) => {
-                                        const meta = STATUS_META[r.status] || STATUS_META["idle"];
+                                        const meta = STATUS_META[r.status] || STATUS_META.idle;
                                         return (
                                             <div key={`${fidsPage}-${r.id}`} className={focusMode ? "ps-fids-rows" : undefined} style={{ display: "flex", height: ROW_HEIGHT, animationDelay: focusMode ? `${rowIndex * 30}ms` : undefined }}>
                                                 <div
@@ -4907,11 +4878,47 @@ useEffect(() => {
                         <div className="ps-scroll" style={styles.analyticsWrap}>
                             <div style={{ maxWidth: 1100, margin: "0 auto" }}>
 
-                                {/* ── Job QR ──────────────────────────────────────── */}
-                                <div style={{ ...styles.qrIntro, marginTop: 0 }}>
+                                {/* ── STEP 1: Machine bind QR ─────────────────────────────── */}
+                                <div style={{ ...styles.qrIntro, background: "#EFF6FF", borderColor: "#BFDBFE" }}>
+                                    <Cpu size={16} color="#1D4ED8" />
+                                    <span style={{ color: "#1D4ED8" }}>
+                                        <b>Step 1</b> — Scan machine QR to lock which machine you are working on, then scan the job QR
+                                    </span>
+                                </div>
+                                <div style={styles.qrGrid}>
+                                    {resources.map((r) => {
+                                        const origin = typeof window !== "undefined" ? window.location.origin : "";
+                                        const bindUrl = `${origin}/?bind=resource&resource=${r.id}`;
+                                        const bindImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(bindUrl)}`;
+                                        const meta = STATUS_META[r.status] || STATUS_META.idle;
+                                        return (
+                                            <div key={r.id} style={{ ...styles.qrCard, borderColor: "#BFDBFE" }}>
+                                                <div style={styles.qrCardHeader}>
+                                                    <meta.Icon size={13} color="#1D4ED8" />
+                                                    <span style={styles.qrJobName}>{r.name}</span>
+                                                </div>
+                                                <div style={styles.qrResourceName}>{r.type}</div>
+                                                <div style={styles.qrImages}>
+                                                    <div style={styles.qrImageBlock}>
+                                                        <img src={bindImg} alt={`bind ${r.name}`} style={styles.qrImage} />
+                                                        <div style={{ ...styles.qrLabel, color: "#1D4ED8" }}>
+                                                            <Cpu size={11} /> BIND
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                    {resources.length === 0 && (
+                                        <div style={styles.bottleneckEmpty}>No machines in system</div>
+                                    )}
+                                </div>
+
+                                {/* ── STEP 2: Job QR ──────────────────────────────────────── */}
+                                <div style={{ ...styles.qrIntro, marginTop: 24 }}>
                                     <QrCode size={16} color="#1B6E8C" />
                                     <span>
-                                        Scan <b>START</b> to begin / <b>STOP</b> to finish — machine is matched automatically from your user account
+                                        <b>Step 2</b> — Scan START to begin / STOP to finish — system will verify job matches selected machine
                                     </span>
                                 </div>
                                 <div style={styles.qrGrid}>
@@ -4965,7 +4972,7 @@ useEffect(() => {
                                         const clearUrl = `${origin}/?alarm=clear&resource=${r.id}`;
                                         const alarmImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(alarmUrl)}`;
                                         const clearImg = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(clearUrl)}`;
-                                        const meta = STATUS_META[r.status] || STATUS_META["idle"];
+                                        const meta = STATUS_META[r.status] || STATUS_META.idle;
                                         return (
                                             <div key={r.id} style={styles.qrCard}>
                                                 <div style={styles.qrCardHeader}>
@@ -5465,30 +5472,13 @@ useEffect(() => {
                                             </div>
                                             <div style={{ fontSize: 12, color: "#6B7280", marginTop: 6 }}>{roleMeta(userFormRole).desc}</div>
                                         </div>
-                                        {/* Assigned Machine — shown for operator role only */}
-                                        {userFormRole === "operator" && (
-                                            <div style={{ marginBottom: 12 }}>
-                                                <label style={{ ...styles.fieldLabel, color: "#374151" }}>Assigned Machine</label>
-                                                <select className="ps-select" value={userFormMachineId}
-                                                    style={{ width: "100%", borderRadius: 6, fontSize: 13, border: "1px solid #D1D5DB", background: "#fff" }}
-                                                    onChange={(e) => setUserFormMachineId(e.target.value)}>
-                                                    <option value="">— Any machine (no restriction) —</option>
-                                                    {resources.map((r) => (
-                                                        <option key={r.id} value={r.id}>{r.name} {r.type ? `(${r.type})` : ""}</option>
-                                                    ))}
-                                                </select>
-                                                <div style={{ fontSize: 11.5, color: "#6B7280", marginTop: 4 }}>
-                                                    Operator will be warned when scanning jobs on a different machine
-                                                </div>
-                                            </div>
-                                        )}
                                         {userFormError && <div style={{ fontSize: 12, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "7px 12px", marginBottom: 12 }}>{userFormError}</div>}
                                         <div style={{ display: "flex", gap: 8 }}>
                                             <button disabled={userFormSaving}
                                                 style={{ background: "#111827", color: "#fff", border: "none", borderRadius: 6, padding: "9px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", opacity: userFormSaving ? 0.6 : 1 }}
                                                 onClick={async () => {
-                                                    if (userFormMode === "add") { const ok = await addUser(userFormUsername, userFormPassword, userFormRole, userFormEmail, userFormAvatar, userFormMachineId); if (ok) closeUserForm(); }
-                                                    else { updateUserRole(userFormMode.id, userFormRole); updateUserEmail(userFormMode.id, userFormEmail); updateUserAvatar(userFormMode.id, userFormAvatar); updateUserMachine(userFormMode.id, userFormMachineId); if (userFormPassword) { const ok = await updateUserPassword(userFormMode.id, userFormPassword); if (!ok) return; } closeUserForm(); }
+                                                    if (userFormMode === "add") { const ok = await addUser(userFormUsername, userFormPassword, userFormRole, userFormEmail, userFormAvatar); if (ok) closeUserForm(); }
+                                                    else { updateUserRole(userFormMode.id, userFormRole); updateUserEmail(userFormMode.id, userFormEmail); updateUserAvatar(userFormMode.id, userFormAvatar); if (userFormPassword) { const ok = await updateUserPassword(userFormMode.id, userFormPassword); if (!ok) return; } closeUserForm(); }
                                                 }}>
                                                 {userFormSaving ? "Saving…" : userFormMode === "add" ? "Add user" : "Save changes"}
                                             </button>
@@ -5543,7 +5533,7 @@ useEffect(() => {
                                 {/* ── table ── */}
                                 <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10, overflow: "hidden" }}>
                                     {/* thead */}
-                                    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 140px", alignItems: "center", padding: "11px 16px", borderBottom: "1px solid #E5E7EB", gap: 8, background: "#F9FAFB" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 160px", alignItems: "center", padding: "11px 16px", borderBottom: "1px solid #E5E7EB", gap: 8, background: "#F9FAFB" }}>
                                         {[
                                             { label: "User name",   col: "username" },
                                             { label: "Role",        col: "role" },
@@ -5582,7 +5572,7 @@ useEffect(() => {
                                         return (
                                             <React.Fragment key={u.id}>
                                                 <div
-                                                    style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 140px", alignItems: "center", padding: "12px 16px", gap: 8, borderBottom: (isLast && !expanded) ? "none" : "1px solid #F3F4F6", background: expanded ? "#F5F3FF" : "#FFFFFF", cursor: "pointer" }}
+                                                    style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 160px", alignItems: "center", padding: "12px 16px", gap: 8, borderBottom: (isLast && !expanded) ? "none" : "1px solid #F3F4F6", background: expanded ? "#F5F3FF" : "#FFFFFF", cursor: "pointer" }}
                                                     onClick={() => setSelectedUserId(expanded ? null : u.id)}
                                                 >
                                                     {/* avatar + name + email */}
@@ -5621,14 +5611,6 @@ useEffect(() => {
                                                         {u.role === "operator" && (
                                                             <span style={{ fontSize: 11.5, fontWeight: 600, background: "#FFF7ED", color: "#9A3412", border: "1px solid #FED7AA", borderRadius: 6, padding: "3px 9px" }}>Schedule</span>
                                                         )}
-                                                        {u.role === "operator" && u.machineId && (() => {
-                                                            const m = resources.find((r) => r.id === u.machineId);
-                                                            return m ? (
-                                                                <span style={{ fontSize: 11.5, fontWeight: 600, background: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE", borderRadius: 6, padding: "3px 9px", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                                                                    <Cpu size={10} />{m.name}
-                                                                </span>
-                                                            ) : null;
-                                                        })()}
                                                         {u.role === "viewer" && (
                                                             <span style={{ fontSize: 11.5, fontWeight: 600, background: "#F3F4F6", color: "#6B7280", border: "1px solid #D1D5DB", borderRadius: 6, padding: "3px 9px" }}>View only</span>
                                                         )}
