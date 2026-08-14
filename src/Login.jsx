@@ -8,7 +8,7 @@ async function hashPassword(plain) {
     return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export default function Login({ onSuccess }) {
+export default function Login({ onSuccess, hint }) {
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
     const [error, setError]       = useState("");
@@ -107,6 +107,12 @@ export default function Login({ onSuccess }) {
                 <div style={styles.body}>
                     <div style={styles.title}>Production Scheduler</div>
                     <div style={styles.sub}>Enter your credentials to continue</div>
+                    {hint && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 6, padding: "8px 12px", marginBottom: 4, fontSize: 12.5, color: "#1D4ED8", fontWeight: 500 }}>
+                            <span style={{ fontSize: 16 }}>🔒</span>
+                            {hint}
+                        </div>
+                    )}
 
                     <div style={styles.fieldLabel}>Username</div>
                     <input
