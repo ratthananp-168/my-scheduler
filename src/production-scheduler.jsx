@@ -120,6 +120,34 @@ function snapHours(hours) {
 }
 // total block width on Gantt = setup + production duration + tool change time
 // job.duration = production only; setupMin and tool changes (tcDurationMin × changes) add on top
+// Reads diameter / length hints out of a tool name, e.g. "EM D10 L75", "10mm End Mill",
+// "DRILL 6.8", "TAP M8x1.25", "FACE MILL DIA50". Returns nulls when nothing is found.
+function parseToolDims(name) {
+    const n = String(name || "");
+    let dia = null, len = null;
+    let m = n.match(/(?:\u00D8|\u2300|DIA\.?|\bD)\s*=?\s*(\d+(?:\.\d+)?)/i);
+    if (m) dia = parseFloat(m[1]);
+    if (dia == null && (m = n.match(/\bM(\d+(?:\.\d+)?)\s*[xX\u00D7]/))) dia = parseFloat(m[1]);
+    if (dia == null && (m = n.match(/(\d+(?:\.\d+)?)\s*mm/i))) dia = parseFloat(m[1]);
+    if (dia == null && (m = n.match(/(?:DRILL|REAM(?:ER)?|SPOT|EM|ENDMILL|END MILL|MILL|CHAMFER)\s*(\d+(?:\.\d+)?)/i))) dia = parseFloat(m[1]);
+    if (dia == null && /BALL/i.test(n) && (m = n.match(/\bR\s*(\d+(?:\.\d+)?)/i))) dia = parseFloat(m[1]) * 2;
+    if ((m = n.match(/(?:\bL|LEN|OAL|LENGTH)\s*=?\s*(\d+(?:\.\d+)?)/i))) len = parseFloat(m[1]);
+    return { dia, len };
+}
+
+// Demo-only: plausible diameter/length for a tool with no data, seeded from the tool key so the
+// same tool always gets the same numbers. Shown in the Shop Doc as italic "sample" values.
+function sampleToolDims(key, name, knownDia) {
+    let h = 2166136261;
+    for (const ch of String(key || "x")) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
+    const r = (h % 1000) / 1000;
+    const n = String(name || "").toUpperCase();
+    const pool = /FACE/.test(n) ? [40, 50, 63, 80] : /TAP/.test(n) ? [5, 6, 8, 10] : /DRILL|SPOT|REAM/.test(n) ? [3.3, 5, 6.8, 8.5, 10] : /CHAMF/.test(n) ? [8, 10, 12] : [4, 6, 8, 10, 12, 16, 20];
+    const dia = knownDia != null ? knownDia : pool[Math.floor(r * pool.length)];
+    const len = /FACE/.test(n) ? 60 : Math.round(Math.max(40, dia * 5 + 20) / 5) * 5;
+    return { dia, len };
+}
+
 // Demo-only sample drawing for Shop Docs. Draws a made-up part (top view + section) seeded from
 // the job id so each job looks different. Shape family follows the job's product (Bracket ->
 // L-bracket, Housing -> deep-pocket block, Panel -> slotted plate, Fixture -> tooling plate),
@@ -2381,6 +2409,7 @@ useEffect(() => {
             const tools = job.tools || [];
             const changes = Math.max(0, tools.length - 1);
 
+            let anySample = false;
             const toolRows = tools.map((t) => {
                 const key = (t.number || "?") + "::" + t.name;
                 const meta = toolMetadata[key] || {};
@@ -2388,15 +2417,29 @@ useEffect(() => {
                 const used = sum ? sum.actualHours + sum.liveHours : 0;
                 const life = (sum && sum.maxLife) || meta.maxLife || TOOL_LIFE_HOURS;
                 const pct = Math.min(999, (used / life) * 100);
-                const warn = pct >= 90;
-                return `<tr${warn ? ' class="warn"' : ""}>
+                const expired = pct >= 100;
+                const warn = pct >= 90 && !expired;
+                // Ø / Length priority: Tools page metadata -> parsed from tool name -> demo sample -> "-"
+                const has = (v) => v != null && v !== "" && !Number.isNaN(Number(v));
+                const parsed = parseToolDims(t.name);
+                const knownDia = has(meta.diameter) ? Number(meta.diameter) : parsed.dia;
+                const sample = demoDrawing ? sampleToolDims(key, t.name, knownDia) : { dia: null, len: null };
+                const cell = (metaVal, parsedVal, sampleVal) => {
+                    if (has(metaVal)) return esc(metaVal);
+                    if (parsedVal != null) return esc(parsedVal);
+                    if (sampleVal != null) { anySample = true; return `<span class="smp">${esc(sampleVal)}*</span>`; }
+                    return "-";
+                };
+                // Location: Tools page value -> machine the job is scheduled on + pocket (T no.)
+                const loc = meta.location ? esc(meta.location) : res ? `${esc(res.name)} / ${esc(tNum(t.number))}` : "-";
+                return `<tr class="${expired ? "exp" : warn ? "warn" : ""}">
                     <td><span class="tno">${esc(tNum(t.number))}</span></td>
                     <td>${esc(t.name)}</td>
-                    <td class="num mono">${meta.diameter != null && meta.diameter !== "" ? esc(meta.diameter) : "-"}</td>
-                    <td class="num mono">${meta.length != null && meta.length !== "" ? esc(meta.length) : "-"}</td>
-                    <td class="mono">${esc(meta.location || "-")}</td>
+                    <td class="num mono">${cell(meta.diameter, parsed.dia, sample.dia)}</td>
+                    <td class="num mono">${cell(meta.length, parsed.len, sample.len)}</td>
+                    <td class="mono">${loc}</td>
                     <td class="num mono">${fmtH(t.hours || 0)}</td>
-                    <td class="num mono">${pct.toFixed(0)}%${warn ? " &#9650;" : ""}</td>
+                    <td class="num mono">${expired ? "EXPIRED " : ""}${pct.toFixed(0)}%${warn ? " &#9650;" : ""}</td>
                     <td></td>
                     <td class="c"><span class="box"></span></td>
                 </tr>`;
@@ -2444,7 +2487,7 @@ useEffect(() => {
   <h2>Tool list <span>${tools.length} tools</span></h2>
   ${tools.length ? `<table class="grid">
     <thead><tr><th>T</th><th>Tool</th><th class="num">&Oslash; (mm)</th><th class="num">Length</th><th>Location</th><th class="num">Est. time</th><th class="num">Life used</th><th>Meas. L</th><th class="c">OK</th></tr></thead>
-    <tbody>${toolRows}</tbody></table>` : `<div class="empty">No tool data for this job (import from NC file to fill this table).</div>`}
+    <tbody>${toolRows}</tbody></table>${anySample ? '<div class="foot">* sample value (demo mode) - not from tool data. Fill real &Oslash; / Length on the Tools page.</div>' : ""}` : `<div class="empty">No tool data for this job (import from NC file to fill this table).</div>`}
 
   <table class="sign"><tr>
     <td><div class="k">Planner</div><div class="v sm">${esc(operator)}</div><div class="k">${printedAt}</div></td>
@@ -2497,6 +2540,10 @@ h2 span { font: 400 10px "IBM Plex Mono", monospace; color: #1B6E8C; margin-left
 .tno { font-weight: 600; color: #1B6E8C; }
 tr.warn td { background: #FFF6DC; }
 tr.warn td:nth-child(7) { color: #B07A00; font-weight: 600; }
+tr.exp td { background: #FDECEB; }
+tr.exp td:nth-child(7) { color: #C4372E; font-weight: 700; }
+.smp { color: #8A929B; font-style: italic; }
+.foot { font-size: 9px; color: #8A929B; margin-top: 2px; }
 .box { display: inline-block; width: 10px; height: 10px; border: 1.2px solid #5E6670; border-radius: 1px; }
 .empty { color: #8A929B; padding: 6px 0; }
 .sign { width: 100%; border-collapse: collapse; margin-top: auto; }
