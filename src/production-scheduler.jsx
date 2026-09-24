@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
 import * as XLSX from "xlsx";
-import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, Minimize2, ChevronLeft, ChevronRight, ChevronDown, QrCode, Play, Square, Zap, Upload, Wrench, Clock, FileSpreadsheet, Printer, Volume2, VolumeX, Settings, Plus, Coffee, PieChart, Layers, Package, LogOut, History as HistoryIcon, Move, Link2, Cpu, Users, Shield, Eye, UserPlus, KeyRound } from "lucide-react";
+import { Cog, PauseCircle, AlertTriangle, CircleOff, CheckCircle2, Lock, X, ZoomIn, ZoomOut, RotateCcw, Trash2, CalendarDays, Boxes, BarChart3, TrendingUp, AlertOctagon, Gauge, Home as HomeIcon, ArrowRight, ListChecks, Search, Maximize2, Minimize2, ChevronLeft, ChevronRight, ChevronDown, QrCode, Play, Square, Zap, Upload, Wrench, Clock, FileSpreadsheet, Printer, Volume2, VolumeX, Settings, Plus, Coffee, PieChart, Layers, Package, LogOut, History as HistoryIcon, Move, Link2, Cpu, Users, Shield, Eye, UserPlus, KeyRound, FileText } from "lucide-react";
 import { parseNCProgram, jobNameFromFilename } from "./utils/ncParser";
 
 // simple non-crypto hash for passwords stored in schedule_state
@@ -120,6 +120,134 @@ function snapHours(hours) {
 }
 // total block width on Gantt = setup + production duration + tool change time
 // job.duration = production only; setupMin and tool changes (tcDurationMin × changes) add on top
+// Demo-only sample drawing for Shop Docs. Draws a made-up part (top view + section) seeded from
+// the job id so each job looks different. Shape family follows the job's product (Bracket ->
+// L-bracket, Housing -> deep-pocket block, Panel -> slotted plate, Fixture -> tooling plate),
+// with a random other shape now and then (incl. round flange). Always watermarked
+// "SAMPLE - NOT FOR PRODUCTION" - never real geometry, only for demos/layout tests.
+function sampleDrawingSVG(seedText, product) {
+    let h = 2166136261;
+    for (const ch of String(seedText || "x")) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
+    const rnd = () => { h ^= h << 13; h >>>= 0; h ^= h >> 17; h ^= h << 5; h >>>= 0; return h / 4294967296; };
+    const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+    const SHAPES = ["plate", "lbracket", "block", "slotted", "flange"];
+    const BY_PRODUCT = { Bracket: "lbracket", Housing: "block", Panel: "slotted", Fixture: "plate" };
+    const shape = BY_PRODUCT[product] && rnd() < 0.75 ? BY_PRODUCT[product] : pick(SHAPES);
+
+    const C = "#2B3138", FILL = "#E4EEF2", ACC = "#1B6E8C", WARN = "#F2A900";
+    const MONO = 'font-family="IBM Plex Mono,monospace"';
+    const txt = (x, y, t, o = {}) => `<text x="${(+x).toFixed(1)}" y="${(+y).toFixed(1)}" font-size="${o.size || 10}" ${o.anchor ? `text-anchor="${o.anchor}"` : ""} ${o.bold ? 'font-weight="600"' : ""} fill="${o.color || C}" ${MONO}${o.rot != null ? ` transform="rotate(${o.rot} ${(+x).toFixed(1)} ${(+y).toFixed(1)})"` : ""}>${t}</text>`;
+    const circ = (x, y, r, o = {}) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="${o.fill || "none"}" stroke="${C}" stroke-width="${o.w || 1.1}"${o.dash ? ' stroke-dasharray="2 2"' : ""}/>`;
+    const rect = (x, y, w, hh, o = {}) => `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${hh.toFixed(1)}" rx="${(o.rx || 0).toFixed(1)}" fill="${o.fill || "#fff"}" stroke="${C}" stroke-width="${o.w || 1.1}"/>`;
+    const path = (d, o = {}) => `<path d="${d}" fill="${o.fill || FILL}" stroke="${C}" stroke-width="${o.w || 1.1}"/>`;
+    const wcs = (cx, cy, label) =>
+        `<line x1="${cx}" y1="${cy}" x2="${cx + 45}" y2="${cy}" stroke="${ACC}" stroke-width="2"/><polygon points="${cx + 45},${cy - 4} ${cx + 53},${cy} ${cx + 45},${cy + 4}" fill="${ACC}"/>` +
+        `<line x1="${cx}" y1="${cy}" x2="${cx}" y2="${cy - 45}" stroke="${ACC}" stroke-width="2"/><polygon points="${cx - 4},${cy - 45} ${cx},${cy - 53} ${cx + 4},${cy - 45}" fill="${ACC}"/>` +
+        `<circle cx="${cx}" cy="${cy}" r="5" fill="${WARN}" stroke="${C}"/>` +
+        txt(cx + 56, cy + 4, "X+", { bold: true, color: ACC }) + txt(cx + 6, cy - 55, "Y+", { bold: true, color: ACC }) +
+        txt(cx - 6, cy + 17, label || "G54", { bold: true });
+    const dimH = (x1, x2, y, v) => `<line x1="${x1.toFixed(1)}" y1="${y}" x2="${x2.toFixed(1)}" y2="${y}" stroke="${C}" stroke-width=".7"/>` + txt((x1 + x2) / 2, y + 12, v, { anchor: "middle" });
+    const dimV = (x, y1, y2, v) => `<line x1="${x}" y1="${y1.toFixed(1)}" x2="${x}" y2="${y2.toFixed(1)}" stroke="${C}" stroke-width=".7"/>` + txt(x - 4, (y1 + y2) / 2, v, { anchor: "middle", rot: -90 });
+    const sectionTitle = (x, y, t) => `<text x="${x}" y="${y}" font-size="9" fill="#5E6670" font-family="IBM Plex Sans,sans-serif">${t}</text>`;
+    const z0 = (x1, x2, y) => `<line x1="${x1 - 4}" y1="${y}" x2="${x2 + 4}" y2="${y}" stroke="${WARN}" stroke-width="1.4" stroke-dasharray="4 2"/>`;
+
+    const ox = 40, oy = 25;
+    let g = "", vbW = 480, vbH = 260, title = "";
+
+    if (shape === "flange") {
+        const D = pick([100, 120, 140, 160]), bore = Math.round(D * pick([0.3, 0.35, 0.4])), T = pick([15, 20, 25]);
+        const n = pick([4, 6, 8]), pcd = Math.round(D * 0.75), s = 190 / D, R = (D / 2) * s;
+        const cx = ox + R + 10, cy = oy + R;
+        g += circ(cx, cy, R, { fill: "#fff", w: 1.5 }) + circ(cx, cy, (bore / 2) * s, { fill: FILL });
+        g += `<circle cx="${cx}" cy="${cy}" r="${((pcd / 2) * s).toFixed(1)}" fill="none" stroke="#8A929B" stroke-width=".6" stroke-dasharray="8 3 2 3"/>`;
+        for (let i = 0; i < n; i++) {
+            const a = (Math.PI * 2 * i) / n + Math.PI / n;
+            g += circ(cx + Math.cos(a) * (pcd / 2) * s, cy + Math.sin(a) * (pcd / 2) * s, 4.5 * s + 2);
+        }
+        g += txt(cx, cy + (bore / 2) * s + 14, `&#216;${bore} H7 THRU`, { anchor: "middle", size: 9 });
+        g += txt(cx + R - 10, oy + 6, `${n}x &#216;9 PCD${pcd}`, { size: 9 });
+        g += wcs(cx, cy, " ");
+        g += txt(cx - 34, cy - 8, "G54", { bold: true, anchor: "end" });
+        g += dimH(cx - R, cx + R, cy + R + 16, `&#216;${D}`);
+        const sx = cx + R + 50, sy = oy + 30, sw = 70, sh = T * 2.2, hb = (bore / D) * sw / 2;
+        g += sectionTitle(sx, sy - 6, "Section A-A");
+        g += path(`M${sx},${sy} H${sx + sw / 2 - hb} V${sy + sh} H${sx} Z`) + path(`M${sx + sw / 2 + hb},${sy} H${sx + sw} V${sy + sh} H${sx + sw / 2 + hb} Z`);
+        g += z0(sx, sx + sw, sy) + txt(sx, sy + sh + 16, `Z0 top · T=${T}`, { size: 9 });
+        vbW = sx + sw + 30; vbH = cy + R + 40; title = "FLANGE";
+    } else {
+        const L = shape === "slotted" ? pick([140, 160, 180]) : pick([100, 120, 140, 160]);
+        const W = pick([60, 70, 80, 90]);
+        const T = shape === "slotted" ? pick([3, 4, 5, 6]) : shape === "block" ? pick([35, 40, 50]) : pick([15, 20, 25, 30]);
+        const s = 300 / L, pw_ = L * s, ph_ = W * s;
+        const X = (x) => ox + x * s, Y = (y) => oy + (W - y) * s;
+        g += rect(ox, oy, pw_, ph_, { w: 1.5 });
+        const sx = ox + pw_ + 30, sy = oy + 14, sw = 80;
+        let secH = Math.max(24, Math.min(80, T * 1.6));
+
+        if (shape === "plate") {
+            const pl = Math.round(L * (0.35 + rnd() * 0.2)), pwk = Math.round(W * (0.35 + rnd() * 0.15)), pd = pick([5, 6, 8, 10]);
+            const hasPocket = rnd() > 0.2, grid = pick([[3, 2], [4, 3], [2, 2]]);
+            if (hasPocket) g += rect(X((L - pl) / 2), Y((W + pwk) / 2), pl * s, pwk * s, { rx: 5 * s, fill: FILL }) + txt(ox + pw_ / 2, oy + ph_ / 2 + 4, `POCKET ${pl}x${pwk} D${pd}`, { anchor: "middle" });
+            for (let i = 0; i < grid[0]; i++) for (let j = 0; j < grid[1]; j++) {
+                const hx = 10 + (i * (L - 20)) / (grid[0] - 1), hy = 10 + (j * (W - 20)) / (grid[1] - 1);
+                if (hasPocket && hx > (L - pl) / 2 - 4 && hx < (L + pl) / 2 + 4 && hy > (W - pwk) / 2 - 4 && hy < (W + pwk) / 2 + 4) continue;
+                g += circ(X(hx), Y(hy), 3.4 * s);
+            }
+            g += txt(X(10) + 12, Y(10) - 10, `&#216;6 H7 grid`, { size: 9 });
+            const dp = hasPocket ? (pd / T) * secH : 0;
+            g += sectionTitle(sx, sy - 6, "Section A-A");
+            g += hasPocket ? path(`M${sx},${sy} H${sx + 22} V${sy + dp} H${sx + 58} V${sy} H${sx + sw} V${sy + secH} H${sx} Z`) : rect(sx, sy, sw, secH, { fill: FILL });
+            title = "TOOLING PLATE";
+        } else if (shape === "lbracket") {
+            const leg = pick([8, 10, 12]), Hleg = pick([40, 50, 60]);
+            g += `<rect x="${ox.toFixed(1)}" y="${oy.toFixed(1)}" width="${pw_.toFixed(1)}" height="${(leg * s).toFixed(1)}" fill="${FILL}" stroke="${C}" stroke-width="1.1"/>`;
+            g += txt(ox + pw_ / 2, oy + leg * s - 3, `LEG t=${leg} H=${Hleg}`, { anchor: "middle", size: 9 });
+            const nh = pick([2, 3]);
+            for (let i = 0; i < nh; i++) {
+                const hx = 15 + (i * (L - 30)) / (nh - 1);
+                g += rect(X(hx) - 7 * s, Y(W * 0.35) - 3.5 * s, 14 * s, 7 * s, { rx: 3.5 * s });
+            }
+            g += txt(X(15) - 7 * s, Y(W * 0.35) - 3.5 * s - 6, `${nh}x SLOT 14x7`, { size: 9 });
+            g += circ(X(L * 0.5), Y(W * 0.62), 4 * s);
+            const sh2 = Math.min(90, Hleg * 1.2), tb = leg * 1.4;
+            g += sectionTitle(sx, sy - 6, "Section A-A (side)");
+            g += path(`M${sx},${sy} H${sx + tb} V${sy + sh2 - tb} H${sx + sw} V${sy + sh2} H${sx} Z`);
+            secH = sh2; title = "L-BRACKET";
+        } else if (shape === "block") {
+            const pl = Math.round(L * 0.55), pwk = Math.round(W * 0.5), pd = Math.round(T * pick([0.5, 0.6, 0.7]));
+            g += rect(X((L - pl) / 2), Y((W + pwk) / 2), pl * s, pwk * s, { rx: 8 * s, fill: "#CFDDE4" });
+            g += rect(X((L - pl) / 2) + 4, Y((W + pwk) / 2) + 4, pl * s - 8, pwk * s - 8, { rx: 6 * s, fill: FILL, w: 0.7 });
+            g += txt(ox + pw_ / 2, oy + ph_ / 2 + 4, `DEEP POCKET ${pl}x${pwk} D${pd}`, { anchor: "middle", size: 9.5 });
+            [[9, 9], [L - 9, 9], [9, W - 9], [L - 9, W - 9]].forEach(([hx, hy]) => { g += circ(X(hx), Y(hy), 5.5 * s) + circ(X(hx), Y(hy), 3.3 * s); });
+            g += txt(X(9) + 14, Y(9) - 12, `4x CBORE M6`, { size: 9 });
+            const dp = (pd / T) * secH;
+            g += sectionTitle(sx, sy - 6, "Section A-A");
+            g += path(`M${sx},${sy} H${sx + 14} V${sy + dp} H${sx + sw - 14} V${sy} H${sx + sw} V${sy + secH} H${sx} Z`);
+            title = "HOUSING BLOCK";
+        } else {
+            const ns = pick([2, 3]), sl = Math.round(L * pick([0.25, 0.3, 0.35])), swd = pick([6, 8, 10]);
+            for (let i = 0; i < ns; i++) {
+                const cy2 = W * ((i + 1) / (ns + 1));
+                g += rect(X((L - sl) / 2), Y(cy2) - (swd / 2) * s, sl * s, swd * s, { rx: (swd / 2) * s, fill: FILL });
+            }
+            g += txt(X((L + sl) / 2) + 8, Y(W * (1 / (ns + 1))) + 3, `${ns}x SLOT ${sl}x${swd}`, { size: 9 });
+            [[6, 6], [L - 6, 6], [6, W - 6], [L - 6, W - 6]].forEach(([hx, hy]) => { g += circ(X(hx), Y(hy), 2.2 * s); });
+            if (rnd() > 0.5) g += rect(X(L - 30), Y(W - 8), 22 * s, 14 * s, { rx: 1, fill: FILL }) + txt(X(L - 19), Y(W - 8) - 4, "CUTOUT", { anchor: "middle", size: 8 });
+            secH = Math.max(12, T * 3);
+            g += sectionTitle(sx, sy - 6, "Section A-A");
+            g += rect(sx, sy, sw, secH, { fill: FILL });
+            title = "PANEL";
+        }
+        g += z0(sx, sx + sw, sy) + txt(sx, sy + secH + 16, `Z0 top · T=${T}`, { size: 9 });
+        g += wcs(ox, oy + ph_);
+        g += dimH(ox, ox + pw_, oy + ph_ + 26, String(L)) + dimV(ox - 16, oy, oy + ph_, String(W));
+        vbW = sx + sw + 24; vbH = oy + ph_ + 48;
+    }
+    g += txt(vbW - 8, 14, title, { anchor: "end", size: 9, bold: true, color: "#5E6670" });
+    g += `<text x="${vbW / 2}" y="${vbH / 2}" text-anchor="middle" font-size="21" font-weight="700" fill="#C4372E" fill-opacity="0.22" font-family="IBM Plex Sans,Arial,sans-serif" transform="rotate(-18 ${vbW / 2} ${vbH / 2})">SAMPLE - NOT FOR PRODUCTION</text>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vbW.toFixed(0)} ${vbH.toFixed(0)}" style="width:100%;height:100%;max-height:62mm">${g}</svg>`;
+}
+
 function jobTotalHours(job) {
     const toolCount = (job.tools || []).length;
     const changes = Math.max(0, toolCount - 1);
@@ -188,6 +316,7 @@ const ACTION_META = {
     nc_created: { Icon: Upload, color: "#1B6E8C" },
     nc_updated: { Icon: Upload, color: OVERDUE_AMBER },
     job_linked: { Icon: Link2, color: "#1B6E8C" },
+    shopdoc_generated: { Icon: FileText, color: "#1B6E8C" },
 };
 function actionMeta(action) {
     return ACTION_META[action] || { Icon: HistoryIcon, color: "#6E6E6E" };
@@ -242,6 +371,63 @@ const PRODUCTS = {
     Fixture: "#E0559B",
     Rework: "#F0625B",
 };
+
+// Manual/simulated job naming convention: {PROCESS}-{PartNo}-{OpSeq}[_{Suffix}]
+// e.g. CNC-4521-10_ROUGH, STMP-8890-05, ASM-2201-01_SUB, PAINT-1103-01
+// Process comes from the resource type the job runs on (or is picked manually while
+// unscheduled); PartNo/OpSeq/Suffix are edited in the job details panel.
+// NC-imported jobs are named separately via jobNameFromFilename() in ncParser.js
+// and are NOT affected by this.
+const PROCESS_META = {
+    CNC: { label: "CNC", base: 4000 },
+    STMP: { label: "Stamping", base: 8000 },
+    ASM: { label: "Assembly", base: 2000 },
+    PAINT: { label: "Paint", base: 1000 },
+};
+const PROCESS_OPTIONS = Object.keys(PROCESS_META);
+// maps the existing resource `type` strings (see INITIAL_RESOURCES) to a process code
+const RESOURCE_TYPE_TO_PROCESS = {
+    "CNC mill": "CNC",
+    "Stamping press": "STMP",
+    "Assembly line": "ASM",
+    "Paint booth": "PAINT",
+};
+function processForResource(resourceId, resourcesList) {
+    const r = (resourcesList || []).find((x) => x.id === resourceId);
+    return (r && RESOURCE_TYPE_TO_PROCESS[r.type]) || "CNC";
+}
+// assembles the display name from its parts; opSeq is always 2-digit zero-padded
+function buildJobName(process, partNo, opSeq, opSuffix) {
+    const proc = process || "CNC";
+    const pn = partNo || "0000";
+    const seq = String(opSeq !== undefined && opSeq !== null && opSeq !== "" ? opSeq : 10).padStart(2, "0");
+    const suf = (opSuffix || "").trim().toUpperCase().replace(/\s+/g, "_");
+    return suf ? `${proc}-${pn}-${seq}_${suf}` : `${proc}-${pn}-${seq}`;
+}
+// a few plausible op-sequence/suffix combos per process, used only to give simulated
+// demo jobs realistic-looking variety (CNC rough/finish passes, single-station stamping
+// and paint ops, an assembly sub-step, etc.)
+const PROCESS_OP_PRESETS = {
+    CNC: [{ opSeq: 10, opSuffix: "ROUGH" }, { opSeq: 20, opSuffix: "FINISH" }, { opSeq: 30, opSuffix: "FINISH" }],
+    STMP: [{ opSeq: 5, opSuffix: "" }, { opSeq: 10, opSuffix: "" }],
+    ASM: [{ opSeq: 1, opSuffix: "SUB" }, { opSeq: 2, opSuffix: "" }],
+    PAINT: [{ opSeq: 1, opSuffix: "" }],
+};
+// next unused part number for a process, scanning existing job names so re-runs
+// (including within the same simulation batch) don't reuse a part number.
+function nextPartNo(process, jobsList) {
+    const meta = PROCESS_META[process] || { base: 5000 };
+    const re = new RegExp(`^${process}-(\\d+)-`);
+    let max = meta.base;
+    (jobsList || []).forEach((j) => {
+        const m = re.exec(j.name || "");
+        if (m) {
+            const num = parseInt(m[1], 10);
+            if (num > max) max = num;
+        }
+    });
+    return String(max + 1);
+}
 
 const INITIAL_JOBS = [
     { id: "j1", name: "BR-1042", product: "Bracket", resourceId: "r1", startHour: 2, duration: 6, locked: false },
@@ -616,7 +802,7 @@ useEffect(() => {
     const [userFormAvatar, setUserFormAvatar] = useState(""); // base64 data URL
     const [userFormPassword, setUserFormPassword] = useState("");
     const [userFormRole, setUserFormRole] = useState("operator");
-    const [userFormMachineId, setUserFormMachineId] = useState(""); // assigned machine
+    const [userFormMachineIds, setUserFormMachineIds] = useState([]); // assigned machines (multi)
     const [userFormError, setUserFormError] = useState("");
     const [userFormSaving, setUserFormSaving] = useState(false);
     const [selectedUserId, setSelectedUserId] = useState(null);
@@ -638,6 +824,8 @@ useEffect(() => {
     const [ncFolderUpdating, setNcFolderUpdating] = useState(false);
     const [poolMachineFilter, setPoolMachineFilter] = useState("all");
     const [simulatedJobIds, setSimulatedJobIds] = useState(new Set());
+    // jobs ticked on the QR Codes page for Shop Doc generation
+    const [shopDocSelectedIds, setShopDocSelectedIds] = useState(() => new Set());
     const groupSnapshotRef = useRef(null); // snapshot of machineGroups before edit starts
 
     // rough signature of an NC job's substance (duration + tool list), used to tell a genuine
@@ -1412,10 +1600,12 @@ useEffect(() => {
                 if (!p) return;
                 if (!p.isRunning && j.isRunning) {
                     const res = resourcesRef.current.find((r) => r.id === j.resourceId);
-                    logActivity("job_started", `${j.name} started`, { jobId: j.id, resourceId: j.resourceId, resourceName: res ? res.name : null }, "Floor (scan/QR)");
+                    const actor = (j.scanBy && j.scanBy.trim()) ? j.scanBy.trim() : "Floor (scan/QR)";
+                    logActivity("job_started", `${j.name} started`, { jobId: j.id, resourceId: j.resourceId, resourceName: res ? res.name : null }, actor);
                 } else if (p.isRunning && !j.isRunning && j.completed && !p.completed) {
                     const res = resourcesRef.current.find((r) => r.id === j.resourceId);
-                    logActivity("job_stopped", `${j.name} stopped${j.actualRunHours ? ` · ${j.actualRunHours.toFixed(1)}h` : ""}`, { jobId: j.id, resourceId: j.resourceId, resourceName: res ? res.name : null, actualRunHours: j.actualRunHours || null }, "Floor (scan/QR)");
+                    const actor = (j.scanBy && j.scanBy.trim()) ? j.scanBy.trim() : "Floor (scan/QR)";
+                    logActivity("job_stopped", `${j.name} stopped${j.actualRunHours ? ` · ${j.actualRunHours.toFixed(1)}h` : ""}`, { jobId: j.id, resourceId: j.resourceId, resourceName: res ? res.name : null, actualRunHours: j.actualRunHours || null }, actor);
                 }
             });
         }
@@ -1432,14 +1622,16 @@ useEffect(() => {
                 const p = prevMap.get(r.id);
                 if (!p) return;
                 if (!p.alarmActive && r.alarmActive) {
+                    const actor = (r.scanBy && r.scanBy.trim()) ? r.scanBy.trim() : "Floor (scan/QR)";
                     logActivity(
                         "alarm_raised",
                         `${r.name} alarm raised · ${ALARM_REASONS.find((a) => a.id === r.alarmReason)?.label || "unknown reason"}`,
                         { resourceId: r.id, resourceName: r.name, reason: ALARM_REASONS.find((a) => a.id === r.alarmReason)?.label || r.alarmReason },
-                        "Floor (scan/QR)"
+                        actor
                     );
                 } else if (p.alarmActive && !r.alarmActive) {
-                    logActivity("alarm_cleared", `${r.name} alarm cleared`, { resourceId: r.id, resourceName: r.name }, "Floor (scan/QR)");
+                    const actor = (r.scanBy && r.scanBy.trim()) ? r.scanBy.trim() : "Floor (scan/QR)";
+                    logActivity("alarm_cleared", `${r.name} alarm cleared`, { resourceId: r.id, resourceName: r.name }, actor);
                 }
                 // status is a <select>, so it changes atomically on commit - safe to diff here.
                 // name/type are free-text inputs that update per keystroke, so they're
@@ -1859,6 +2051,16 @@ useEffect(() => {
         }
     }
 
+    // like updateJob, but for the process/partNo/opSeq/opSuffix fields on the details
+    // panel: applies the edit, then rebuilds job.name from the resulting values so the
+    // {PROCESS}-{PartNo}-{OpSeq}[_{Suffix}] convention stays in sync. Typing directly into
+    // the job name field itself (updateJob) always wins until one of these fields changes again.
+    function updateJobNaming(job, patch) {
+        const merged = { ...job, ...patch };
+        const name = buildJobName(merged.process, merged.partNo, merged.opSeq, merged.opSuffix);
+        updateJob(job.id, { ...patch, name });
+    }
+
     // datetime-local input <-> startHour (hours since baseDate/midnight today) conversions
     function startHourToLocalInputValue(startHour) {
         const d = new Date(baseDate.getTime() + startHour * 3600000);
@@ -1936,8 +2138,9 @@ useEffect(() => {
     // isSimulated:true so they can be bulk-cleared without touching real data.
     const SIM_PRODUCTS = ["Bracket", "Housing", "Panel", "Fixture"];
     const SIM_DURATIONS = [2, 3, 4, 5, 6]; // hours - reasonable job sizes
-    const SIM_NAMES = ["SIM-A", "SIM-B", "SIM-C", "SIM-D", "SIM-E", "SIM-F", "SIM-G", "SIM-H", "SIM-J", "SIM-K"];
-    let _simNameIdx = 0;
+
+    // NOTE: job names for a simulated run are built as {PROCESS}-{PartNo}-{OpSeq}[_{Suffix}]
+    // (see runSimulation below), matching the convention used for manually-created jobs.
 
     function runSimulation() {
         const SIM_HOURS = 72;
@@ -1958,6 +2161,7 @@ useEffect(() => {
         const newSimIds = new Set();
 
         resources.forEach((r) => {
+            const process = processForResource(r.id, resources); // CNC/STMP/ASM/PAINT from the machine type
             const intervals = occupied[r.id] || [];
             let cursor = 0;
             const gaps = [];
@@ -1977,9 +2181,12 @@ useEffect(() => {
                     const maxDur = Math.min(avail, 6);
                     const dur = Math.max(1, snapHours(1 + Math.random() * (maxDur - 1)));
                     const prod = SIM_PRODUCTS[Math.floor(Math.random() * SIM_PRODUCTS.length)];
-                    const name = SIM_NAMES[(_simNameIdx++) % SIM_NAMES.length] + "-" + String(simJobs.length + 1).padStart(2, "0");
+                    const partNo = nextPartNo(process, [...currentJobs, ...simJobs]);
+                    const presets = PROCESS_OP_PRESETS[process] || [{ opSeq: 10, opSuffix: "" }];
+                    const { opSeq, opSuffix } = presets[Math.floor(Math.random() * presets.length)];
+                    const name = buildJobName(process, partNo, opSeq, opSuffix);
                     simJobs.push({
-                        id: newId("sim"), name, product: prod,
+                        id: newId("sim"), name, product: prod, process, partNo, opSeq, opSuffix,
                         resourceId: r.id, startHour: snapHours(pos), duration: dur,
                         locked: false, isSimulated: true, setupMin: 0, tcDurationMin: 0, tools: [],
                     });
@@ -2135,6 +2342,185 @@ useEffect(() => {
         await saveWorkbook(wb, defaultName);
     }
 
+    // ---------------------------------------------------------------------------------
+    // Shop Doc generator: builds one A4-landscape setup sheet per selected job and opens it
+    // in a new window, then triggers the browser print dialog (print or Save as PDF).
+    // Data comes from what ProdSched already has: job, resource, times, tools, tool metadata
+    // and tool life. Drawing area is a placeholder box - no drawing data is stored yet.
+    // ---------------------------------------------------------------------------------
+    function toggleShopDocSelect(jobId) {
+        setShopDocSelectedIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(jobId)) next.delete(jobId);
+            else next.add(jobId);
+            return next;
+        });
+    }
+
+    function generateShopDocs(jobIds) {
+        const ids = Array.from(jobIds || []);
+        const docJobs = ids.map((id) => jobs.find((j) => j.id === id)).filter(Boolean);
+        if (docJobs.length === 0) return;
+
+        const esc = (v) => String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        const fmtDT = (ms) => new Date(ms).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+        const fmtH = (h) => { const m = Math.round(h * 60); return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`; };
+        const tNum = (n) => { const x = String(n || "").replace(/^T/i, ""); return x ? `T${x}` : "-"; };
+        const origin = window.location.origin;
+        const operator = getOperatorName();
+        const printedAt = fmtDT(Date.now());
+        const demoDrawing = !!appConfig.shopDocDemo;
+
+        const pages = docJobs.map((job) => {
+            const res = resources.find((r) => r.id === job.resourceId);
+            const startMs = baseDate.getTime() + (job.startHour || 0) * 3600000;
+            const totalH = jobTotalHours(job);
+            const finishMs = startMs + totalH * 3600000;
+            const jobUrl = `${origin}/?scan=job&job=${job.id}`;
+            const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=4&data=${encodeURIComponent(jobUrl)}`;
+            const tools = job.tools || [];
+            const changes = Math.max(0, tools.length - 1);
+
+            const toolRows = tools.map((t) => {
+                const key = (t.number || "?") + "::" + t.name;
+                const meta = toolMetadata[key] || {};
+                const sum = toolSummary.find((x) => (x.number || "?") + "::" + x.name === key);
+                const used = sum ? sum.actualHours + sum.liveHours : 0;
+                const life = (sum && sum.maxLife) || meta.maxLife || TOOL_LIFE_HOURS;
+                const pct = Math.min(999, (used / life) * 100);
+                const warn = pct >= 90;
+                return `<tr${warn ? ' class="warn"' : ""}>
+                    <td><span class="tno">${esc(tNum(t.number))}</span></td>
+                    <td>${esc(t.name)}</td>
+                    <td class="num mono">${meta.diameter != null && meta.diameter !== "" ? esc(meta.diameter) : "-"}</td>
+                    <td class="num mono">${meta.length != null && meta.length !== "" ? esc(meta.length) : "-"}</td>
+                    <td class="mono">${esc(meta.location || "-")}</td>
+                    <td class="num mono">${fmtH(t.hours || 0)}</td>
+                    <td class="num mono">${pct.toFixed(0)}%${warn ? " &#9650;" : ""}</td>
+                    <td></td>
+                    <td class="c"><span class="box"></span></td>
+                </tr>`;
+            }).join("");
+
+            const warnTools = tools.filter((t) => {
+                const key = (t.number || "?") + "::" + t.name;
+                const sum = toolSummary.find((x) => (x.number || "?") + "::" + x.name === key);
+                const meta = toolMetadata[key] || {};
+                const life = (sum && sum.maxLife) || meta.maxLife || TOOL_LIFE_HOURS;
+                return sum && (sum.actualHours + sum.liveHours) / life >= 0.9;
+            });
+
+            const notes = [];
+            if (warnTools.length) notes.push(`Tool life &ge; 90%: ${warnTools.map((t) => esc(tNum(t.number) + " " + t.name)).join(", ")} - check or replace before run.`);
+            if (res && res.alarmActive) notes.push(`Machine ${esc(res.name)} has an active alarm - job cannot be started until cleared.`);
+            if (job.locked) notes.push("Job is locked in the schedule - do not move without planner approval.");
+            notes.push("First piece to QC with this sheet. Do not start the lot until QC signs.");
+
+            return `<section class="page">
+  <header class="title">
+    <div class="t-main"><div class="pn">${esc(job.name)}</div><div class="sub">${esc(job.product || "")}${job.process ? " &middot; " + esc(job.process) : ""}${job.partNo ? " &middot; Part " + esc(job.partNo) : ""}${job.opSeq != null && job.opSeq !== "" ? " &middot; OP" + esc(String(job.opSeq).padStart(2, "0")) : ""}</div></div>
+    <div><div class="k">Machine</div><div class="v">${esc(res ? res.name : "Unassigned")}</div></div>
+    <div><div class="k">Start</div><div class="v sm">${fmtDT(startMs)}</div></div>
+    <div><div class="k">Finish</div><div class="v sm">${fmtDT(finishMs)}</div></div>
+    <div><div class="k">NC file</div><div class="v sm">${esc(job.ncFileName || "-")}</div></div>
+    <div class="qr"><img src="${qrImg}" alt="QR"><div class="k">Scan: START / STOP</div></div>
+  </header>
+
+  <div class="row">
+    <div class="drawing">${demoDrawing ? sampleDrawingSVG(job.id + job.name, job.product) + '<div class="demo-tag">DEMO</div>' : '<div class="ph">Drawing / setup image<br><span>attach NX drawing here</span></div>'}</div>
+    <div class="spec">
+      <table class="kv">
+        <tr><th>Production time</th><td>${fmtH(job.duration || 0)}</td></tr>
+        <tr><th>Setup time</th><td>${job.setupMin ? job.setupMin + " min" : "-"}</td></tr>
+        <tr><th>Tool changes</th><td>${changes}${job.tcDurationMin ? " &times; " + job.tcDurationMin + " min" : ""}</td></tr>
+        <tr><th>Total block</th><td><b>${fmtH(totalH)}</b></td></tr>
+        <tr><th>Resource type</th><td>${esc(res ? res.type : "-")}</td></tr>
+        <tr><th>Job ID</th><td>${esc(job.id)}</td></tr>
+      </table>
+      <div class="notes"><b>Notes</b><ul>${notes.map((n) => `<li>${n}</li>`).join("")}</ul></div>
+    </div>
+  </div>
+
+  <h2>Tool list <span>${tools.length} tools</span></h2>
+  ${tools.length ? `<table class="grid">
+    <thead><tr><th>T</th><th>Tool</th><th class="num">&Oslash; (mm)</th><th class="num">Length</th><th>Location</th><th class="num">Est. time</th><th class="num">Life used</th><th>Meas. L</th><th class="c">OK</th></tr></thead>
+    <tbody>${toolRows}</tbody></table>` : `<div class="empty">No tool data for this job (import from NC file to fill this table).</div>`}
+
+  <table class="sign"><tr>
+    <td><div class="k">Planner</div><div class="v sm">${esc(operator)}</div><div class="k">${printedAt}</div></td>
+    <td><div class="k">Setup by</div><div class="line"></div><div class="k">Sign / Date</div></td>
+    <td><div class="k">First piece QC</div><div class="line"></div><div class="k">Sign / Date</div></td>
+    <td><div class="k">Supervisor</div><div class="line"></div><div class="k">Sign / Date</div></td>
+  </tr></table>
+  <footer>ProdSched Shop Doc &middot; ${esc(job.name)} &middot; printed ${printedAt}</footer>
+</section>`;
+        }).join("");
+
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Shop Doc - ${docJobs.length} job${docJobs.length !== 1 ? "s" : ""}</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+@page { size: A4 landscape; margin: 8mm; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #E9EBED; font: 11px/1.4 "IBM Plex Sans", "Segoe UI", sans-serif; color: #1F2328; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.bar { position: sticky; top: 0; background: #F5F6F7; border-bottom: 1px solid #D4D4D4; padding: 8px 16px; display: flex; gap: 8px; align-items: center; }
+.bar button { font: 600 12px "IBM Plex Sans", sans-serif; background: #1B6E8C; color: #fff; border: 0; border-radius: 3px; padding: 6px 14px; cursor: pointer; }
+.page { width: 281mm; min-height: 194mm; margin: 12px auto; background: #fff; border: 1px solid #D4D4D4; padding: 6mm; display: flex; flex-direction: column; gap: 3mm; page-break-after: always; }
+.page:last-child { page-break-after: auto; }
+.mono, .v, .kv td, .grid td.mono, .tno { font-family: "IBM Plex Mono", Consolas, monospace; }
+.title { display: grid; grid-template-columns: 1.6fr 1fr 1.1fr 1.1fr 1.2fr 70px; border: 1px solid #D4D4D4; border-bottom: 2px solid #F2A900; background: #F5F6F7; }
+.title > div { padding: 5px 8px; border-right: 1px solid #D4D4D4; }
+.title > div:last-child { border-right: 0; }
+.pn { font: 600 18px "IBM Plex Mono", monospace; color: #1B6E8C; }
+.sub, .k { color: #5E6670; font-size: 9.5px; }
+.v { font-weight: 600; font-size: 13px; margin-top: 1px; }
+.v.sm { font-size: 11px; }
+.qr { text-align: center; background: #fff; }
+.qr img { width: 56px; height: 56px; display: block; margin: 0 auto; }
+.row { display: grid; grid-template-columns: 1.5fr 1fr; gap: 4mm; }
+.drawing { border: 1.5px dashed #B8BEC5; border-radius: 2px; min-height: 62mm; display: flex; align-items: center; justify-content: center; background: #FAFBFB; }
+.ph { text-align: center; color: #8A929B; font-weight: 600; font-size: 12px; }
+.ph span { font-weight: 400; font-size: 10px; }
+.drawing { position: relative; padding: 2mm; }
+.demo-tag { position: absolute; top: 4px; right: 4px; font: 700 9px "IBM Plex Mono", monospace; color: #fff; background: #C4372E; border-radius: 2px; padding: 1px 6px; letter-spacing: 0.08em; }
+.kv { width: 100%; border-collapse: collapse; }
+.kv th, .kv td { border: 1px solid #D4D4D4; padding: 3px 7px; text-align: left; }
+.kv th { background: #F5F6F7; color: #5E6670; font-weight: 400; width: 40%; }
+.notes { margin-top: 3mm; border-left: 3px solid #F2A900; background: #FFF6DC; padding: 4px 8px; }
+.notes ul { margin: 2px 0 0; padding-left: 16px; }
+h2 { margin: 0; font-size: 12px; border-bottom: 1px solid #D4D4D4; padding-bottom: 2px; }
+h2 span { font: 400 10px "IBM Plex Mono", monospace; color: #1B6E8C; margin-left: 6px; }
+.grid { width: 100%; border-collapse: collapse; }
+.grid th, .grid td { border: 1px solid #D4D4D4; padding: 2.5px 6px; text-align: left; }
+.grid th { background: #F5F6F7; color: #5E6670; font-size: 9.5px; }
+.num { text-align: right !important; }
+.c { text-align: center !important; }
+.tno { font-weight: 600; color: #1B6E8C; }
+tr.warn td { background: #FFF6DC; }
+tr.warn td:nth-child(7) { color: #B07A00; font-weight: 600; }
+.box { display: inline-block; width: 10px; height: 10px; border: 1.2px solid #5E6670; border-radius: 1px; }
+.empty { color: #8A929B; padding: 6px 0; }
+.sign { width: 100%; border-collapse: collapse; margin-top: auto; }
+.sign td { border: 1px solid #D4D4D4; padding: 4px 8px; width: 25%; vertical-align: top; height: 16mm; }
+.line { border-bottom: 1px solid #8A929B; margin: 7mm 0 2px; }
+footer { font-size: 9px; color: #8A929B; text-align: right; }
+@media print { body { background: #fff; } .bar { display: none; } .page { margin: 0; border: 0; padding: 0; width: auto; min-height: 192mm; } }
+</style></head><body>
+<div class="bar"><button onclick="window.print()">Print / Save as PDF</button><span>${docJobs.length} shop doc${docJobs.length !== 1 ? "s" : ""}</span></div>
+${pages}
+<script>window.onload = function () { setTimeout(function () { window.print(); }, 400); };</script>
+</body></html>`;
+
+        const w = window.open("", "_blank");
+        if (!w) {
+            alert("Pop-up blocked - allow pop-ups for this site to generate Shop Docs.");
+            return;
+        }
+        w.document.open();
+        w.document.write(html);
+        w.document.close();
+        logActivity("shopdoc_generated", `Shop Doc generated for ${docJobs.length} job${docJobs.length !== 1 ? "s" : ""}`, { count: docJobs.length, jobs: docJobs.map((j) => j.name).join(", ") });
+    }
+
     function printSchedule() {
         window.print();
     }
@@ -2284,9 +2670,14 @@ useEffect(() => {
     }
 
     function addJob() {
-        const n = jobs.length + 1;
+        const product = Object.keys(PRODUCTS)[0];
+        const process = "CNC"; // default while unscheduled — user can change process/part/op in the details panel
+        const partNo = nextPartNo(process, jobs);
+        const opSeq = 10;
+        const opSuffix = "";
+        const name = buildJobName(process, partNo, opSeq, opSuffix);
         const id = "new-" + Date.now();
-        const newJob = { id, name: "JOB-" + n, product: Object.keys(PRODUCTS)[0], resourceId: null, startHour: 0, duration: 4, locked: false };
+        const newJob = { id, name, product, process, partNo, opSeq, opSuffix, resourceId: null, startHour: 0, duration: 4, locked: false };
         setJobs((js) => [...js, newJob]);
         setSelectedJobId(id);
         setSelectedResourceId(null);
@@ -2418,7 +2809,7 @@ useEffect(() => {
     // clears the "ps-authed" flag that Login.jsx sets and App.jsx checks on mount, then
     // reloads so App.jsx re-evaluates and shows the login screen again
     // ── User management ──────────────────────────────────────────────────────
-    async function addUser(username, password, role, email, avatar, assignedMachineId) {
+    async function addUser(username, password, role, email, avatar, assignedMachineIds) {
         if (!username.trim()) { setUserFormError("Username is required"); return false; }
         if (password.length < 4) { setUserFormError("Password must be at least 4 characters"); return false; }
         if (users.find((u) => u.username.toLowerCase() === username.trim().toLowerCase())) {
@@ -2426,7 +2817,7 @@ useEffect(() => {
         }
         setUserFormSaving(true);
         const passwordHash = await hashPassword(password);
-        const newUser = { id: newId("usr"), username: username.trim(), email: (email || "").trim(), avatar: avatar || "", passwordHash, role, assignedMachineId: assignedMachineId || null, createdAt: new Date().toISOString() };
+        const newUser = { id: newId("usr"), username: username.trim(), email: (email || "").trim(), avatar: avatar || "", passwordHash, role, assignedMachineIds: assignedMachineIds || [], createdAt: new Date().toISOString() };
         setUsers((prev) => [...prev, newUser]);
         setUserFormSaving(false);
         return true;
@@ -2453,8 +2844,8 @@ useEffect(() => {
         setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, avatar: avatar || "" } : u)));
     }
 
-    function updateUserMachine(userId, machineId) {
-        setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, assignedMachineId: machineId || null } : u)));
+    function updateUserMachine(userId, machineIds) {
+        setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, assignedMachineIds: machineIds || [] } : u)));
     }
 
     function deleteUser(userId) {
@@ -2482,7 +2873,7 @@ useEffect(() => {
         setUserFormAvatar(user.avatar || "");
         setUserFormPassword("");
         setUserFormRole(user.role);
-        setUserFormMachineId(user.assignedMachineId || "");
+        setUserFormMachineIds(Array.isArray(user.assignedMachineIds) ? user.assignedMachineIds : (user.assignedMachineId ? [user.assignedMachineId] : []));
         setUserFormError("");
     }
 
@@ -4896,6 +5287,36 @@ useEffect(() => {
                                     <QrCode size={16} color="#1B6E8C" />
                                     <span>Scan QR code to open the job — then choose <b>START</b> or <b>STOP</b> on screen</span>
                                 </div>
+                                {/* Shop Doc toolbar - tick jobs below, then generate */}
+                                {scheduledJobs.length > 0 && (() => {
+                                    const selCount = scheduledJobs.filter((j) => shopDocSelectedIds.has(j.id)).length;
+                                    const allSelected = selCount === scheduledJobs.length;
+                                    return (
+                                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px", background: "#F5F6F7", border: "1px solid #D4D4D4", borderBottom: "2px solid #F2A900", borderRadius: 3, flexWrap: "wrap" }}>
+                                            <FileText size={15} color="#1B6E8C" />
+                                            <span style={{ fontSize: 12.5, fontWeight: 600, color: "#262626" }}>Shop Doc</span>
+                                            <span style={{ fontSize: 11.5, color: "#6E6E6E", fontFamily: "'IBM Plex Mono',monospace" }}>{selCount} / {scheduledJobs.length} selected</span>
+                                            {appConfig.shopDocDemo && (
+                                                <span title="Demo drawing is on (Settings)" style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", background: "#C4372E", borderRadius: 2, padding: "1px 6px", letterSpacing: "0.06em", fontFamily: "'IBM Plex Mono',monospace" }}>DEMO</span>
+                                            )}
+                                            <button
+                                                className="ps-zoombtn"
+                                                style={{ ...styles.zoomBtn, width: "auto", padding: "0 10px" }}
+                                                onClick={() => setShopDocSelectedIds(allSelected ? new Set() : new Set(scheduledJobs.map((j) => j.id)))}
+                                            >
+                                                {allSelected ? "Clear all" : "Select all"}
+                                            </button>
+                                            <button
+                                                disabled={selCount === 0}
+                                                onClick={() => generateShopDocs(scheduledJobs.filter((j) => shopDocSelectedIds.has(j.id)).map((j) => j.id))}
+                                                style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, height: 30, padding: "0 14px", fontSize: 12, fontWeight: 700, background: selCount ? "#1B6E8C" : "#C8C8C8", color: "#FFFFFF", border: "none", borderRadius: 3, cursor: selCount ? "pointer" : "not-allowed" }}
+                                                title="Open printable shop docs for the selected jobs"
+                                            >
+                                                <Printer size={13} /> Generate Shop Doc{selCount > 1 ? ` (${selCount})` : ""}
+                                            </button>
+                                        </div>
+                                    );
+                                })()}
                                 <div style={styles.qrGrid}>
                                     {scheduledJobs.map((job) => {
                                         const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -4903,11 +5324,25 @@ useEffect(() => {
                                         const jobImg = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(jobUrl)}`;
                                         const res = resources.find((r) => r.id === job.resourceId);
                                         return (
-                                            <div key={job.id} style={styles.qrCard}>
+                                            <div key={job.id} style={{ ...styles.qrCard, ...(shopDocSelectedIds.has(job.id) ? { borderColor: "#1B6E8C", boxShadow: "0 0 0 2px rgba(27,110,140,0.18)" } : {}) }}>
                                                 <div style={styles.qrCardHeader}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={shopDocSelectedIds.has(job.id)}
+                                                        onChange={() => toggleShopDocSelect(job.id)}
+                                                        title="Select for Shop Doc"
+                                                        style={{ accentColor: "#1B6E8C", width: 14, height: 14, margin: 0, cursor: "pointer", flexShrink: 0 }}
+                                                    />
                                                     <span style={{ ...styles.legendDot, background: PRODUCTS[job.product] }} />
                                                     <span style={styles.qrJobName}>{job.name}</span>
                                                     {job.isRunning && <span style={styles.qrRunningBadge}>running</span>}
+                                                    <button
+                                                        onClick={() => generateShopDocs([job.id])}
+                                                        title="Shop Doc for this job"
+                                                        style={{ marginLeft: job.isRunning ? 4 : "auto", display: "flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, background: "#FFFFFF", border: "1px solid #C8C8C8", borderRadius: 3, cursor: "pointer", padding: 0, flexShrink: 0 }}
+                                                    >
+                                                        <FileText size={13} color="#1B6E8C" />
+                                                    </button>
                                                 </div>
                                                 <div style={styles.qrResourceName}>{res ? res.name : "unassigned"} · {job.product}</div>
                                                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
@@ -5453,25 +5888,32 @@ useEffect(() => {
                                                 Assigned Machine
                                                 <span style={{ fontWeight: 400, color: "#9CA3AF", marginLeft: 6 }}>(used when scanning jobs)</span>
                                             </label>
-                                            <select
-                                                className="ps-select"
-                                                value={userFormMachineId}
-                                                onChange={(e) => setUserFormMachineId(e.target.value)}
-                                                style={{ width: "100%", fontSize: 13, padding: "7px 10px" }}
-                                            >
-                                                <option value="">— None (block scan START) —</option>
-                                                {resources.map((r) => (
-                                                    <option key={r.id} value={r.id}>{r.name} · {r.type}</option>
-                                                ))}
-                                            </select>
+                                            <div style={{ border: "1px solid #D1D5DB", borderRadius: 4, padding: "6px 8px", maxHeight: 140, overflowY: "auto", background: "#FAFAFA" }}>
+                                                {resources.length === 0 && <div style={{ fontSize: 12, color: "#9CA3AF" }}>No machines defined</div>}
+                                                {resources.map((r) => {
+                                                    const checked = userFormMachineIds.includes(r.id);
+                                                    return (
+                                                        <label key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px", cursor: "pointer", borderRadius: 3, background: checked ? "#EFF6FF" : "transparent" }}>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={checked}
+                                                                onChange={() => setUserFormMachineIds((prev) => checked ? prev.filter((id) => id !== r.id) : [...prev, r.id])}
+                                                                style={{ accentColor: "#1B6E8C", width: 14, height: 14, cursor: "pointer" }}
+                                                            />
+                                                            <span style={{ fontSize: 12.5, fontFamily: "'IBM Plex Mono',monospace", color: checked ? "#1D4ED8" : "#374151", fontWeight: checked ? 600 : 400 }}>{r.name}</span>
+                                                            <span style={{ fontSize: 11, color: "#9CA3AF" }}>{r.type}</span>
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
                                         {userFormError && <div style={{ fontSize: 12, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "7px 12px", marginBottom: 12 }}>{userFormError}</div>}
                                         <div style={{ display: "flex", gap: 8 }}>
                                             <button disabled={userFormSaving}
                                                 style={{ background: "#111827", color: "#fff", border: "none", borderRadius: 6, padding: "9px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", opacity: userFormSaving ? 0.6 : 1 }}
                                                 onClick={async () => {
-                                                    if (userFormMode === "add") { const ok = await addUser(userFormUsername, userFormPassword, userFormRole, userFormEmail, userFormAvatar, userFormMachineId); if (ok) closeUserForm(); }
-                                                    else { updateUserRole(userFormMode.id, userFormRole); updateUserEmail(userFormMode.id, userFormEmail); updateUserAvatar(userFormMode.id, userFormAvatar); updateUserMachine(userFormMode.id, userFormMachineId); if (userFormPassword) { const ok = await updateUserPassword(userFormMode.id, userFormPassword); if (!ok) return; } closeUserForm(); }
+                                                    if (userFormMode === "add") { const ok = await addUser(userFormUsername, userFormPassword, userFormRole, userFormEmail, userFormAvatar, userFormMachineIds); if (ok) closeUserForm(); }
+                                                    else { updateUserRole(userFormMode.id, userFormRole); updateUserEmail(userFormMode.id, userFormEmail); updateUserAvatar(userFormMode.id, userFormAvatar); updateUserMachine(userFormMode.id, userFormMachineIds); if (userFormPassword) { const ok = await updateUserPassword(userFormMode.id, userFormPassword); if (!ok) return; } closeUserForm(); }
                                                 }}>
                                                 {userFormSaving ? "Saving…" : userFormMode === "add" ? "Add user" : "Save changes"}
                                             </button>
@@ -5599,11 +6041,16 @@ useEffect(() => {
                                                     {/* assigned machine */}
                                                     <div>
                                                         {(() => {
-                                                            const m = resources.find((r) => r.id === u.assignedMachineId);
-                                                            return m ? (
-                                                                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 600, background: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE", borderRadius: 6, padding: "3px 9px", fontFamily: "'IBM Plex Mono',monospace" }}>
-                                                                    <Cpu size={10} color="#1D4ED8" />{m.name}
-                                                                </span>
+                                                            const ids = Array.isArray(u.assignedMachineIds) ? u.assignedMachineIds : (u.assignedMachineId ? [u.assignedMachineId] : []);
+                                                            const machines = ids.map((id) => resources.find((r) => r.id === id)).filter(Boolean);
+                                                            return machines.length > 0 ? (
+                                                                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                                                                    {machines.map((m) => (
+                                                                        <span key={m.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 600, background: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE", borderRadius: 6, padding: "3px 9px", fontFamily: "'IBM Plex Mono',monospace" }}>
+                                                                            <Cpu size={10} color="#1D4ED8" />{m.name}
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
                                                             ) : (
                                                                 <span style={{ fontSize: 11.5, color: "#9CA3AF" }}>—</span>
                                                             );
@@ -5745,6 +6192,32 @@ useEffect(() => {
                                     />
                                 </div>
 
+                                {/* ── Shop Doc demo drawing ── */}
+                                <div style={{ background: "#FFFFFF", border: "1px solid #E8E8E8", borderRadius: 4, padding: "24px 28px", marginBottom: 20 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                                        <FileText size={16} color="#1B6E8C" />
+                                        <span style={{ fontWeight: 700, fontSize: 15, color: "#262626", flex: 1 }}>Shop Doc demo drawing</span>
+                                        <button
+                                            role="switch"
+                                            aria-checked={!!appConfig.shopDocDemo}
+                                            onClick={() => setAppConfig({ ...appConfig, shopDocDemo: !appConfig.shopDocDemo })}
+                                            style={{ position: "relative", width: 40, height: 22, borderRadius: 11, border: "none", cursor: "pointer", padding: 0, background: appConfig.shopDocDemo ? "#1B6E8C" : "#C8C8C8", transition: "background 0.15s", flexShrink: 0 }}
+                                            title={appConfig.shopDocDemo ? "Turn off demo drawing" : "Turn on demo drawing"}
+                                        >
+                                            <span style={{ position: "absolute", top: 3, left: appConfig.shopDocDemo ? 21 : 3, width: 16, height: 16, borderRadius: "50%", background: "#FFFFFF", transition: "left 0.15s" }} />
+                                        </button>
+                                    </div>
+                                    <div style={{ fontSize: 12.5, color: "#6E6E6E", lineHeight: 1.6 }}>
+                                        Fills the Shop Doc drawing area with a made-up sample part, watermarked "SAMPLE - NOT FOR PRODUCTION"
+                                        <br />For demos and layout testing only - turn off before using Shop Docs on the shop floor
+                                    </div>
+                                    {appConfig.shopDocDemo && (
+                                        <div style={{ marginTop: 12, fontSize: 12, color: "#B45309", background: "#FDF3E4", border: "1px solid #F3DDAE", borderRadius: 4, padding: "7px 12px", display: "flex", alignItems: "center", gap: 6 }}>
+                                            <AlertTriangle size={13} /> Demo mode is ON - printed drawings are not real part geometry
+                                        </div>
+                                    )}
+                                </div>
+
                             </div>
                         </div>
                     )}
@@ -5802,6 +6275,53 @@ useEffect(() => {
                                 data-lpignore="true"
                                 data-1p-ignore="true"
                             />
+
+                            <div style={{ display: "flex", gap: 8 }}>
+                                <div style={{ flex: "0 0 90px" }}>
+                                    <label style={styles.fieldLabel}>process</label>
+                                    <select
+                                        className="ps-select"
+                                        value={selectedJob.process || "CNC"}
+                                        onChange={(e) => updateJobNaming(selectedJob, { process: e.target.value })}
+                                    >
+                                        {PROCESS_OPTIONS.map((p) => (
+                                            <option key={p} value={p}>{p}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div style={{ flex: "1 1 auto" }}>
+                                    <label style={styles.fieldLabel}>part no.</label>
+                                    <input
+                                        className="ps-input"
+                                        value={selectedJob.partNo || ""}
+                                        onChange={(e) => updateJobNaming(selectedJob, { partNo: e.target.value.replace(/\s+/g, "") })}
+                                        autoComplete="off"
+                                        placeholder="4521"
+                                    />
+                                </div>
+                            </div>
+
+                            <div style={{ display: "flex", gap: 8 }}>
+                                <div style={{ flex: "0 0 90px" }}>
+                                    <label style={styles.fieldLabel}>op seq.</label>
+                                    <input
+                                        className="ps-input"
+                                        type="number"
+                                        value={selectedJob.opSeq ?? 10}
+                                        onChange={(e) => updateJobNaming(selectedJob, { opSeq: e.target.value === "" ? "" : Number(e.target.value) })}
+                                    />
+                                </div>
+                                <div style={{ flex: "1 1 auto" }}>
+                                    <label style={styles.fieldLabel}>suffix (optional)</label>
+                                    <input
+                                        className="ps-input"
+                                        value={selectedJob.opSuffix || ""}
+                                        onChange={(e) => updateJobNaming(selectedJob, { opSuffix: e.target.value })}
+                                        autoComplete="off"
+                                        placeholder="ROUGH / FINISH / SUB"
+                                    />
+                                </div>
+                            </div>
 
                             <label style={styles.fieldLabel}>product family</label>
                             <select className="ps-select" value={selectedJob.product} onChange={(e) => updateJob(selectedJob.id, { product: e.target.value })}>
